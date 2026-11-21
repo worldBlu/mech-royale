@@ -10,6 +10,25 @@ import random
 
 KIND_VALUE = {"laser": 3.0, "mortar": 2.0, "lightning": 2.2, "gun": 0.2}
 
+# Tunables. The evaluation harness mutates this dict in place, so every knob below is read
+# through ``self.k`` at decision time and an override takes effect on the next tick.
+KNOBS = {
+    "engage_dist": 200.0,       # do not pick a fight with a target farther than this
+    "engage_hp_frac": 0.45,     # do not pick a fight with our own hp below this
+    "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
+    "engage_our_hp": 0.72,
+    "evade_hp_frac": 0.35,      # running away when a fresh hostile is close
+    "evade_dist": 130.0,
+    "evade_aimed_hp": 0.55,     # someone is pointing a weapon at us
+    "evade_aimed_dist": 230.0,
+    "evade_step": 90.0,
+    "farm_threat": 140.0,
+    "crate_threat": 150.0,
+    "loot_threat": 60.0,
+    "boost_energy": 22.0,
+    "standoff": {"gun": 120.0, "laser": 160.0, "mortar": 150.0, "lightning": 28.0},
+}
+
 
 def _ang_diff(a, b):
     return (a - b + math.pi) % (2.0 * math.pi) - math.pi
@@ -23,6 +42,7 @@ class Policy:
         self.combat = combat
         self.cfg = cfg
         self.rng = random.Random(seed)
+        self.k = KNOBS
         self.mode = "LOOT"
         self.mode_t = -99.0
         self.goal = None
@@ -83,10 +103,24 @@ class Policy:
 
         mode = "ROTATE"
         goal = None
+        k = self.k
+        aimed = self._aimed_count(obs, pos, k["evade_aimed_dist"])
+        tr_hp = float(getattr(threat, "hp", 0.0) or 0.0) if threat is not None else 0.0
+        tr_frac = tr_hp / 1400.0 if tr_hp > 0.0 else 1.0
+        # A hurt mech is what the house bots hunt, so disengage before we become the weakest.
+        evade = (
+            (hp_frac < k["evade_hp_frac"] and fresh and threat_d < k["evade_dist"])
+            or (hp_frac < k["evade_aimed_hp"] and aimed > 0 and threat_d < k["evade_aimed_dist"])
+            or (hp_frac < 0.5 and fresh and threat_d < 110.0)
+        )
+        fight_ok = (
+            hp_frac > k["engage_hp_frac"]
+            and (tr_frac < k["engage_target_hp"] or hp_frac > k["engage_our_hp"])
+        )
         if not in_zone:
             mode = "ZONE"
             goal = self._zone_goal(obs, pos)
-        elif hp_frac < 0.35 and fresh and threat_d < 130.0:
+        elif evade and threat is not None:
             mode = "EVADE"
             goal = self._evade_goal(pos, threat, zone_center, zr)
         elif drop_goal is not None:
@@ -98,7 +132,7 @@ class Policy:
         elif cube_goal is not None:
             mode = "LOOT"
             goal = cube_goal
-        elif threat is not None and fresh and threat_d < 200.0 and hp_frac > 0.4:
+        elif threat is not None and fresh and threat_d < k["engage_dist"] and fight_ok:
             mode = "FIGHT"
             goal = self._fight_goal(pos, threat, threat_d, t)
         elif npc_tr is not None:
@@ -172,7 +206,7 @@ class Policy:
         act["aim"] = [float(aim[0]), float(aim[1])]
         energy = float(me.get("energy", 0.0))
         want_boost = (
-            energy > 22.0
+            energy > self.k["boost_energy"]
             and not self.combat.charging
             and (
                 (not in_zone)
@@ -305,7 +339,7 @@ class Policy:
     # ------------------------------------------------------------------ farming
     def _npc_step(self, obs, t, threat_d, hp_frac):
         """Drones wander close and drop two cubes; farm one when nothing else is urgent."""
-        if hp_frac < 0.5 or threat_d < 140.0:
+        if hp_frac < 0.5 or threat_d < self.k["farm_threat"]:
             return 1e9, None
         best = None
         best_d = 1e9
@@ -320,7 +354,7 @@ class Policy:
         return best_d, best
 
     def _crate_step(self, obs, pos, threat_d):
-        if threat_d < 150.0:
+        if threat_d < self.k["crate_threat"]:
             return None
         gslot = self.combat.holding(obs["self"], "gun")
         if gslot is None:
@@ -379,7 +413,7 @@ class Policy:
     # ------------------------------------------------------------------ fight
     def _fight_goal(self, pos, tr, d, t):
         kind = self.combat.last_kind or "gun"
-        pref = {"gun": 120.0, "laser": 160.0, "mortar": 150.0, "lightning": 28.0}.get(kind, 120.0)
+        pref = float(self.k["standoff"].get(kind, 120.0))
         if d > pref + 45.0:
             return (tr.x, tr.y)
         if d < pref - 45.0:
@@ -392,12 +426,48 @@ class Policy:
         return (pos[0] + math.cos(ang) * 22.0, pos[1] + math.sin(ang) * 22.0)
 
     def _evade_goal(self, pos, threat, zone_center, zr):
-        ang = math.atan2(pos[1] - threat.y, pos[0] - threat.x)
-        gx = pos[0] + math.cos(ang) * 90.0
-        gy = pos[1] + math.sin(ang) * 90.0
+        """Flee while breaking line of sight: cover beats raw distance."""
+        base = math.atan2(pos[1] - threat.y, pos[0] - threat.x)
+        step = float(self.k["evade_step"])
+        best = None
+        best_score = -1e9
+        for i in range(-6, 7):
+            ang = base + i * 0.26
+            gx = pos[0] + math.cos(ang) * step
+            gy = pos[1] + math.sin(ang) * step
+            if not self.w.inside(gx, gy) or not self.w.walkable(gx, gy):
+                continue
+            if math.hypot(gx - zone_center[0], gy - zone_center[1]) > zr * 0.85:
+                continue
+            score = math.hypot(gx - threat.x, gy - threat.y) * 0.05
+            if not self.w.has_los(gx, gy, threat.x, threat.y):
+                score += 60.0
+            if score > best_score:
+                best_score = score
+                best = (gx, gy)
+        if best is not None:
+            return best
+        gx = pos[0] + math.cos(base) * step
+        gy = pos[1] + math.sin(base) * step
         if math.hypot(gx - zone_center[0], gy - zone_center[1]) > zr * 0.85:
             return zone_center
         return (gx, gy)
+
+    def _aimed_count(self, obs, pos, rng):
+        """How many visible mechs have their torso pointed at us (a sign we are the target)."""
+        n = 0
+        for a in obs.get("mechs") or []:
+            if float(a.get("hp") or 0.0) <= 0.0:
+                continue
+            ax, ay = a["pos"][0], a["pos"][1]
+            dx, dy = ax - pos[0], ay - pos[1]
+            d = math.hypot(dx, dy)
+            if d > rng or d < 2.0:
+                continue
+            face = float((a.get("aim") or [0.0, 0.0])[0])
+            if abs(_ang_diff(math.atan2(dy, dx), face)) < 0.10:
+                n += 1
+        return n
 
     # ------------------------------------------------------------------ helpers
     def _avoid_wall(self, goal):
