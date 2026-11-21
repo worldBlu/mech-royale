@@ -1,17 +1,21 @@
 """Static map model for mechfight/1.
 
 `world.json` (prisms, terrain description) and `terrain.i16` are mounted read-only at
-`hello.map.dir`. The map is identical in every match, so it is turned once, at startup, into
-a 2 m grid: walkable cells, ground height, and cells that block sight. The navigator, the
-perception and the combat code query that grid.
+`hello.map.dir`. The map is the same in every match, so the 2 m walk / sight / height grids are
+baked offline by `tools/bake_map.py` into `bot/data/nav.bin` and loaded here at startup: a few
+tens of milliseconds instead of the ~800 ms it takes to rasterise 259 prisms and 1560 trees.
+A missing, stale (map hash mismatch) or corrupt bake file falls back to rasterising from
+`world.json`, so `bot/` still runs on its own and the format can never make the bot fail.
 
-Standard library only. Startup cost is dominated by rasterising the prisms (a few hundred
-thousand point-in-polygon tests); everything else is O(cells).
+Standard library only. `terrain_z` stays available on both paths (the replay tool samples it);
+the baked height grid stores centimetres and `height_at` converts with `height_scale`.
 """
 import json
 import math
 import os
+import struct
 import sys
+import zlib
 from array import array
 
 CELL = 2.0                 # metres per grid cell
@@ -22,15 +26,107 @@ SLOPE_TAN = math.tan(math.radians(50.0))
 
 WALK_BLOCK = 1
 
+# --- bake file (bot/data/nav.bin) ------------------------------------------------
+# 72 byte little-endian header, then one zlib stream holding the four grids back to back:
+#   walk[n]  sight[n]  height[n] int16 centimetres  comp[n] uint8 (255 = blocked)
+# The header repeats every length so a truncated or foreign file is rejected instead of
+# producing garbage grids.
+BAKE_MAGIC = b"MECHNAV1"
+BAKE_VERSION = 1
+BAKE_HEADER = 72
+_HDR = struct.Struct("<8sIIIfffffIIIIIIII")
+# magic, format, header bytes, map hash, cell, min_x, min_y, max_x, max_y,
+# nx, ny, payload bytes, walk bytes, sight bytes, height bytes, comp bytes, payload crc32
+
+BAKE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "nav.bin")
+BAKE_ENV = "MECH_NAV_BAKE"     # optional override, used by the bake/bench tools
+
+
+def map_fingerprint(world_json_bytes, terrain_bytes):
+    """CRC32 over world.json followed by terrain.i16, so a bake only loads on its own map."""
+    c = zlib.crc32(world_json_bytes) & 0xFFFFFFFF
+    return zlib.crc32(terrain_bytes, c) & 0xFFFFFFFF
+
+
+def build_components(walk, nx, ny):
+    """Label 4-connected walkable regions; 255 marks a cell the mech cannot stand on.
+
+    Reachability for this navigator is exactly 4-connectivity: a diagonal step needs both
+    orthogonal cells free (no corner cutting), and the reverse holds because any diagonal
+    component is connected through its orthogonal cells too.
+    """
+    total = nx * ny
+    comp = bytearray(b"\xff") * total
+    label = 0
+    for start in range(total):
+        if walk[start] or comp[start] != 255:
+            continue
+        comp[start] = label
+        stack = [start]
+        while stack:
+            k = stack.pop()
+            j = k // nx
+            i = k - j * nx
+            if i > 0:
+                n = k - 1
+                if not walk[n] and comp[n] == 255:
+                    comp[n] = label
+                    stack.append(n)
+            if i + 1 < nx:
+                n = k + 1
+                if not walk[n] and comp[n] == 255:
+                    comp[n] = label
+                    stack.append(n)
+            if j > 0:
+                n = k - nx
+                if not walk[n] and comp[n] == 255:
+                    comp[n] = label
+                    stack.append(n)
+            if j + 1 < ny:
+                n = k + nx
+                if not walk[n] and comp[n] == 255:
+                    comp[n] = label
+                    stack.append(n)
+        if label < 254:
+            label += 1
+    return comp
+
+
+def pack_bake(world):
+    """Serialise a fully rasterised World (walk/sight/height/comp) as nav.bin bytes."""
+    n = world.nx * world.ny
+    if world.comp is None or len(world.comp) != n:
+        raise ValueError("bake needs world.comp (build_components) for the whole grid")
+    heights = array("h")
+    if world.height_scale == 1.0:
+        heights = array("h", (int(round(v * 100.0)) for v in world.height))
+        if heights and (min(heights) < -32767 or max(heights) > 32767):
+            raise ValueError("height grid does not fit int16 centimetres")
+    else:
+        heights = array("h", world.height)
+    if heights.itemsize != 2:
+        raise RuntimeError("array('h') is not 2 bytes on this platform")
+    if sys.byteorder != "little":
+        heights.byteswap()
+    payload = bytes(world.walk) + bytes(world.sight) + heights.tobytes() + bytes(world.comp)
+    data = zlib.compress(payload, 9)
+    header = _HDR.pack(
+        BAKE_MAGIC, BAKE_VERSION, BAKE_HEADER, world.map_hash, CELL,
+        world.min_x, world.min_y, world.max_x, world.max_y,
+        world.nx, world.ny, len(data), n, n, 2 * n, n, zlib.crc32(data),
+    )
+    return header + data
+
 
 class World:
     """Baked map: `walk` and `sight` are row-major grids of nx*ny cells."""
 
-    def __init__(self, map_dir):
+    def __init__(self, map_dir, use_bake=True):
         self.dir = map_dir
         path = os.path.join(map_dir, "v2", "world.json")
         with open(path, "rb") as f:
-            w = json.load(f)
+            raw = f.read()
+        w = json.loads(raw)
         b = w["bounds"]
         self.min_x = float(b["minX"])
         self.min_y = float(b["minY"])
@@ -39,14 +135,89 @@ class World:
         self.cell = CELL
         self.nx = int(math.ceil((self.max_x - self.min_x) / CELL)) + 1
         self.ny = int(math.ceil((self.max_y - self.min_y) / CELL)) + 1
-        self.walk = bytearray(self.nx * self.ny)
-        self.sight = bytearray(self.nx * self.ny)
-        self.height = array("f", bytes(4 * self.nx * self.ny))
+        count = self.nx * self.ny
 
-        self._load_terrain(w["terrain"], map_dir)
-        self._bake_terrain()
-        self._bake_prisms(w.get("prisms") or [])
-        self._bake_trees(w.get("trees") or {})
+        terrain_bytes = self._load_terrain(w["terrain"], map_dir)
+        self.map_hash = map_fingerprint(raw, terrain_bytes)
+
+        self.baked = False
+        self.comp = None
+        if use_bake and self._load_bake(count):
+            pass
+        else:
+            self.walk = bytearray(count)
+            self.sight = bytearray(count)
+            self.height = array("f", bytes(4 * count))
+            self.height_scale = 1.0
+            self._bake_terrain()
+            self._bake_prisms(w.get("prisms") or [])
+            self._bake_trees(w.get("trees") or {})
+        self._build_padded()
+
+    # ---------------------------------------------------------------- baked grids
+    def _load_bake(self, count):
+        """Load bot/data/nav.bin when it was baked for this exact map; False -> rasterise."""
+        path = os.environ.get(BAKE_ENV) or BAKE_FILE
+        try:
+            with open(path, "rb") as f:
+                blob = f.read()
+        except OSError:
+            return False
+        if len(blob) < BAKE_HEADER:
+            return False
+        try:
+            (magic, version, header, fingerprint, cell, min_x, min_y, max_x, max_y,
+             nx, ny, payload_len, walk_len, sight_len, height_len, comp_len,
+             crc) = _HDR.unpack_from(blob, 0)
+        except struct.error:
+            return False
+        if (magic != BAKE_MAGIC or version != BAKE_VERSION or header != BAKE_HEADER
+                or cell != CELL or nx != self.nx or ny != self.ny
+                or fingerprint != self.map_hash):
+            return False
+        # bounds round-trip through f32 in the header: compare at millimetre tolerance
+        if (abs(min_x - self.min_x) > 1e-3 or abs(min_y - self.min_y) > 1e-3
+                or abs(max_x - self.max_x) > 1e-3 or abs(max_y - self.max_y) > 1e-3):
+            return False
+        if walk_len != count or sight_len != count or height_len != 2 * count or comp_len != count:
+            return False
+        if len(blob) != header + payload_len:
+            return False
+        payload = blob[header:]
+        if (zlib.crc32(payload) & 0xFFFFFFFF) != crc:
+            return False
+        try:
+            data = zlib.decompress(payload)
+        except zlib.error:
+            return False
+        if len(data) != walk_len + sight_len + height_len + comp_len:
+            return False
+        self.walk = bytearray(data[:count])
+        self.sight = bytearray(data[count:2 * count])
+        heights = array("h")
+        heights.frombytes(data[2 * count:4 * count])
+        if sys.byteorder != "little":
+            heights.byteswap()
+        if heights.itemsize != 2 or len(heights) != count:
+            return False
+        self.height = heights
+        self.height_scale = 0.01
+        self.comp = bytearray(data[4 * count:])
+        self.baked = True
+        return True
+
+    def _build_padded(self):
+        """Border-padded walk grid used by the navigator (index (j+1)*stride + i+1)."""
+        nx, ny = self.nx, self.ny
+        stride = nx + 2
+        padded = bytearray(b"\x01") * (stride * (ny + 2))
+        walk = self.walk
+        for j in range(ny):
+            src = j * nx
+            dst = (j + 1) * stride + 1
+            padded[dst:dst + nx] = walk[src:src + nx]
+        self.stride = stride
+        self.walkp = padded
 
     # ---------------------------------------------------------------- terrain
     def _load_terrain(self, t, map_dir):
@@ -60,12 +231,17 @@ class World:
         path = os.path.join(map_dir, "v2", name)   # world.json lives in v2/
         if not os.path.isfile(path):
             path = os.path.join(map_dir, name)
-        a = array("h")
         with open(path, "rb") as f:
-            a.frombytes(f.read())
+            raw = f.read()
+        need = 2 * self.t_nx * self.t_ny
+        if len(raw) < need:
+            raise ValueError("terrain file %r is short: %d < %d bytes" % (path, len(raw), need))
+        a = array("h")
+        a.frombytes(raw[:need])
         if sys.byteorder != "little":
             a.byteswap()
         self.terrain = a
+        return raw
 
     def terrain_z(self, x, y):
         """Bilinear ground height at (x, y), clamped to the terrain grid."""
@@ -224,7 +400,7 @@ class World:
 
     def height_at(self, x, y):
         i, j = self.cell_of(x, y)
-        return self.height[j * self.nx + i]
+        return self.height[j * self.nx + i] * self.height_scale
 
     def sight_blocked_cell(self, i, j):
         return self.sight[j * self.nx + i]
