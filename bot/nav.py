@@ -247,8 +247,14 @@ class Navigator:
                     best = j
                     break
                 j -= 1
-            if best < 0:                      # not even the next cell centre is reachable straight
-                break
+            if best < 0:
+                # The raw cell path is valid but nothing within the lookahead can be reached
+                # in a straight line (a tight corridor with a turn every cell). Advance one
+                # A* cell at a time; adjacent cells are always mutually walkable.
+                out.append(pts[i])
+                anchor = pts[i]
+                i += 1
+                continue
             out.append(pts[best])
             anchor = pts[best]
             i = best + 1
@@ -322,11 +328,13 @@ class Navigator:
         nx = w.nx
         walk = w.walk
         si, sj = w.cell_of(px, py)
+        sx, sy = px, py
         if walk[sj * nx + si]:
             n = w.nearest_walkable(px, py)
             if n is None:
                 return []
-            si, sj = w.cell_of(*n)
+            sx, sy = n                        # stand-in for a bot pushed into a blocked cell
+            si, sj = w.cell_of(sx, sy)
         gi, gj = w.cell_of(goal[0], goal[1])
         if walk[gj * nx + gi]:
             n = w.nearest_walkable(goal[0], goal[1])
@@ -343,10 +351,11 @@ class Navigator:
             return [goal]
         cells, _expansions, _truncated = self._astar(si, sj, gi, gj)
         self.last_source = "astar"
-        if not cells:
+        if len(cells) <= 1:                   # start cell is sealed off: no progress possible
+            self.last_source = "stuck"
             return []
         pts = [w.cell_xy(i, j) for i, j in cells]
-        return self._smooth(pts, (px, py), goal)
+        return self._smooth(pts, (sx, sy), goal)
 
     # ------------------------------------------------------------------ steering
     def steer(self, pos, goal, now, force=False):
