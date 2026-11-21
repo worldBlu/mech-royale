@@ -5,7 +5,9 @@ power cubes and a second weapon, keeps itself inside the shrinking circle, and a
 fights it cannot win. Movement goals come from here; the navigator turns them into a
 steering direction and the combat module turns a target into aim and trigger.
 """
+import json
 import math
+import os
 import random
 
 KIND_VALUE = {"laser": 3.0, "mortar": 2.0, "lightning": 2.2, "gun": 0.2}
@@ -26,12 +28,35 @@ KNOBS = {
     "crate_threat": 150.0,
     "loot_threat": 60.0,
     "boost_energy": 22.0,
+    "cover": 0,                 # rotate toward scenery that blocks lines of sight
+    "heal": 0,                  # break contact and let the 45/s regen top us up
+    "heal_hp": 0.85,            # start healing below this fraction
+    "heal_exit": 0.97,          # stop at this fraction
+    "heal_safe_dist": 150.0,    # only heal when the nearest fresh hostile is farther
+    "cube_chase": 1,            # detour to power cubes lying around
+    "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
+    "evade_sticky": 3.0,        # keep running this long after the trigger clears
+    "trade_hp": 0.80,           # disengage when we are losing a duel...
+    "trade_dur": 2.5,           # ...for at least this many seconds
+    "trade_target_hp": 0.92,    # only if the target is still this healthy
     "standoff": {"gun": 120.0, "laser": 160.0, "mortar": 150.0, "lightning": 28.0},
 }
 
 
 def _ang_diff(a, b):
     return (a - b + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def _knobs_from_env():
+    """Per-process override, e.g. ``MF_POLICY_KNOBS={"engage_dist":120}``; used for A/B runs."""
+    k = dict(KNOBS)
+    raw = os.environ.get("MF_POLICY_KNOBS")
+    if raw:
+        try:
+            k.update(json.loads(raw))
+        except (ValueError, TypeError):
+            pass
+    return k
 
 
 class Policy:
@@ -42,7 +67,7 @@ class Policy:
         self.combat = combat
         self.cfg = cfg
         self.rng = random.Random(seed)
-        self.k = KNOBS
+        self.k = _knobs_from_env()
         self.mode = "LOOT"
         self.mode_t = -99.0
         self.goal = None
@@ -55,6 +80,8 @@ class Policy:
         self.stuck_n = 0
         self.jump_until = -99.0
         self.pref = 0.0
+        self.evade_until = -99.0
+        self.evade_from = None
         loot = cfg.get("loot") or {}
         cubes = cfg.get("cubes") or {}
         self.pickup_r = float(loot.get("pickup_radius", 4.0))
@@ -79,6 +106,13 @@ class Policy:
         hostiles = self.perc.hostiles(t, 250.0)
         threat = hostiles[0][1] if hostiles else None
         threat_d = hostiles[0][0] if hostiles else 1e9
+        if self.k.get("target_weak") and hostiles:
+            cands = [h for h in hostiles if (t - h[1].seen) < 0.6 and h[0] < self.k["engage_dist"]]
+            if cands:
+                def _hp(h):
+                    hp = getattr(h[1], "hp", None)
+                    return hp if hp and hp > 0.0 else 1e9
+                threat_d, threat = min(cands, key=lambda h: _hp(h))
         fresh = threat is not None and (t - threat.seen) < 0.4
 
         zone = obs["zone"]
@@ -90,12 +124,16 @@ class Policy:
 
         # --- weapon pickup while a slot is free
         take_id, take_goal = self._pickup_step(obs, me, pos, threat_d, t)
+        if not self.k.get("weapon_chase", 1):
+            take_id, take_goal = None, None
 
         # --- supply drop
         drop_goal, drop_id = self._drop_step(obs, pos, hp_frac, threat_d, t, int(me.get("cubes") or 0))
 
         # --- cube
         cube_goal = self._cube_step(obs, pos, hp_frac, threat_d)
+        if not self.k.get("cube_chase", 1):
+            cube_goal = None
 
         # --- farmable NPC drones and crates (cubes behind both)
         npc_d, npc_tr = self._npc_step(obs, t, threat_d, hp_frac)
@@ -113,19 +151,48 @@ class Policy:
             or (hp_frac < k["evade_aimed_hp"] and aimed > 0 and threat_d < k["evade_aimed_dist"])
             or (hp_frac < 0.5 and fresh and threat_d < 110.0)
         )
+        if evade:
+            self.evade_until = max(self.evade_until, t + float(k["evade_sticky"]))
+            if threat is not None:
+                self.evade_from = (threat.x, threat.y)
+        elif (
+            threat is not None
+            and self.mode == "FIGHT"
+            and hp_frac < k["trade_hp"]
+            and tr_frac > k["trade_target_hp"]
+            and (t - self.mode_t) > k["trade_dur"]
+        ):
+            # Losing the trade: the target is nearly full while we are bleeding out.
+            self.evade_until = max(self.evade_until, t + 2.0)
+            self.evade_from = (threat.x, threat.y)
+        sticky = t < self.evade_until and hp_frac < 0.95 and self.evade_from is not None
         fight_ok = (
             hp_frac > k["engage_hp_frac"]
             and (tr_frac < k["engage_target_hp"] or hp_frac > k["engage_our_hp"])
         )
+        heal = (
+            k.get("heal")
+            and hp_frac < k["heal_hp"]
+            and hp_frac < k["heal_exit"]
+            and (threat is None or (not fresh) or threat_d > k["heal_safe_dist"])
+        )
         if not in_zone:
             mode = "ZONE"
             goal = self._zone_goal(obs, pos)
-        elif evade and threat is not None:
+        elif (evade or sticky) and self.evade_from is not None:
             mode = "EVADE"
-            goal = self._evade_goal(pos, threat, zone_center, zr)
+            if threat is not None and fresh:
+                self.evade_from = (threat.x, threat.y)
+            goal = self._evade_goal(pos, self.evade_from[0], self.evade_from[1], zone_center, zr)
         elif drop_goal is not None:
             mode = "DROP"
             goal = drop_goal
+        elif heal:
+            mode = "HEAL"
+            goal = self._cover_spot(pos, 70.0) or (
+                pos[0] + math.cos(self.rng.uniform(0.0, 2.0 * math.pi)) * 30.0,
+                pos[1] + math.sin(self.rng.uniform(0.0, 2.0 * math.pi)) * 30.0,
+            )
         elif take_goal is not None and threat_d > 60.0:
             mode = "LOOT"
             goal = take_goal
@@ -184,9 +251,9 @@ class Policy:
             combat_out = self._shoot_crate(obs, crate)
         if combat_out:
             aim = combat_out.get("aim")
-            for k in ("fire", "reload"):
-                if k in combat_out:
-                    act[k] = combat_out[k]
+            for _fld in ("fire", "reload"):
+                if _fld in combat_out:
+                    act[_fld] = combat_out[_fld]
         if aim is None:
             if threat is not None:
                 tx, ty = threat.x, threat.y
@@ -253,10 +320,44 @@ class Policy:
                 best = (cube["pos"][0], cube["pos"][1])
         if best is not None and best_d < 90.0:
             return best
+        if self.k.get("cover"):
+            spot = self._cover_spot(center, r)
+            if spot is not None:
+                return spot
         # wander inside the circle, biased to the centre
         ang = self.rng.uniform(0.0, 2.0 * math.pi)
         rad = r * self.rng.uniform(0.1, 0.5)
         return (center[0] + math.cos(ang) * rad, center[1] + math.sin(ang) * rad)
+
+    def _cover_spot(self, center, r):
+        """A walkable cell inside the circle that hugs scenery, so fewer guns have a line on it."""
+        best = None
+        best_score = -1.0
+        for _ in range(24):
+            ang = self.rng.uniform(0.0, 2.0 * math.pi)
+            rad = r * self.rng.uniform(0.15, 0.55)
+            x = center[0] + math.cos(ang) * rad
+            y = center[1] + math.sin(ang) * rad
+            if not self.w.walkable(x, y):
+                continue
+            score = float(self._cover_score(x, y))
+            if not self.w.walkable(x + 6.0, y) and not self.w.walkable(x, y + 6.0):
+                score -= 2.0
+            if score > best_score:
+                best_score = score
+                best = (x, y)
+        return best if best_score >= 3.0 else None
+
+    def _cover_score(self, x, y):
+        i, j = self.w.cell_of(x, y)
+        n = 0
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                if di == 0 and dj == 0:
+                    continue
+                if self.w.sight_blocked_cell(i + di, j + dj):
+                    n += 1
+        return n
 
     # ------------------------------------------------------------------ looting
     def _pickup_step(self, obs, me, pos, threat_d, t):
@@ -425,9 +526,9 @@ class Policy:
         ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + self.strafe_dir * math.pi * 0.5
         return (pos[0] + math.cos(ang) * 22.0, pos[1] + math.sin(ang) * 22.0)
 
-    def _evade_goal(self, pos, threat, zone_center, zr):
+    def _evade_goal(self, pos, tx, ty, zone_center, zr):
         """Flee while breaking line of sight: cover beats raw distance."""
-        base = math.atan2(pos[1] - threat.y, pos[0] - threat.x)
+        base = math.atan2(pos[1] - ty, pos[0] - tx)
         step = float(self.k["evade_step"])
         best = None
         best_score = -1e9
@@ -439,8 +540,8 @@ class Policy:
                 continue
             if math.hypot(gx - zone_center[0], gy - zone_center[1]) > zr * 0.85:
                 continue
-            score = math.hypot(gx - threat.x, gy - threat.y) * 0.05
-            if not self.w.has_los(gx, gy, threat.x, threat.y):
+            score = math.hypot(gx - tx, gy - ty) * 0.05
+            if not self.w.has_los(gx, gy, tx, ty):
                 score += 60.0
             if score > best_score:
                 best_score = score
