@@ -403,6 +403,16 @@ class World:
         return self.height[j * self.nx + i] * self.height_scale
 
     def sight_blocked_cell(self, i, j):
+        # Callers (cover scoring) probe neighbours of a candidate cell, so clamp instead of
+        # trusting the index: an unclamped bytearray read killed the whole act() call.
+        if i < 0:
+            i = 0
+        elif i >= self.nx:
+            i = self.nx - 1
+        if j < 0:
+            j = 0
+        elif j >= self.ny:
+            j = self.ny - 1
         return self.sight[j * self.nx + i]
 
     def has_los(self, x0, y0, x1, y1):

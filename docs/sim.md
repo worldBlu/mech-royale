@@ -98,14 +98,19 @@ mech dies because that fixes the score; the remaining houses do not need simulat
   visible projectiles, crates, cubes, pickups and beams are reported like the server does.
   Sounds use the protocol carry ranges, near/mid/far distance buckets, world-yaw bearings with
   configurable Gaussian noise and an age; own sounds are not echoed.
-* **House bots**: 15 scripted bots, 4 easy / 4 medium / 4 hard / 3 expert, with a shared vision
-  pool, no friendly fire, starting secondaries by difficulty, weapon choice (lightning/laser/
-  mortar/gun), strafing/orbiting at a preferred range, per-level aim error, reaction delay and
-  engagement range. They never attack each other. Because the track notes say the houses prefer
-  the weakest player mech, they also share a noisy "where is the player" track that refreshes
-  every 6/4/2.5/1.5 s with 70/45/25/12 m of error (highest difficulty still alive). That single
-  approximation is what makes the houses actually hunt the bot instead of idling at the next
-  circle; it is the biggest fidelity lever in the simulator.
+* **House bots**: 15 scripted bots, 4 easy / 4 medium / 4 hard / 3 expert, with shared sensing,
+  no friendly fire, starting secondaries by difficulty, weapon choice (lightning/laser/mortar/gun),
+  strafing/orbiting at a preferred range, per-level aim error, reaction delay and engagement range.
+  They never attack each other. Two sensing models are available (`--house-vision`), because the
+  track only says they "share vision, prefer the weakest mech":
+  * `pings` (default): a shared noisy "where is the player" track refreshing every 6/4/2.5/1.5 s
+    with 70/45/25/12 m of error, plus the legacy 6 s memory leak. Over-informed, but keeps older
+    calibration numbers comparable.
+  * `vision`: union of what any living house actually sees (45 m ring / 120 deg cone / 200 m /
+    buildings block), shared for 3 s after the last sighting, no pings and no omniscience. This
+    is structurally the closer model. See the calibration section for the cost of the choice.
+  "Prefer the weakest" is moot in this solo track: all 15 houses have exactly one player mech to
+  hunt, so the pings noise table / vision union are the fidelity levers.
 * **Determinism**: everything (spawns, zones, loot, aim noise) is drawn from a `random.Random`
   seeded by the match seed. The same seed and config reproduce the same match; no wall-clock
   randomness and no imports of `bot/` state leaks between matches (the baked world is cached
@@ -114,15 +119,15 @@ mech dies because that fixes the score; the remaining houses do not need simulat
 ## Fidelity caveats (read before trusting an absolute number)
 
 * **Absolute scores are optimistic.** Calibration against the only independent number we have:
-  the kit's `example_bot.py` scores a reported ~1.15 on the track. In this simulator its mean is
-  **1.90 over 48 matches** (places: 22x16, 7x15, 4x14, ... mean place 14.10) with the same house
-  pressure as the real bot. So the simulator is roughly **+0.5 to +0.8 score generous** for a
-  passive bot; our current bot's 2.33 is best read as "a bit better than the example bot", not
-  as a prediction of the ladder score. Use paired seeds to compare variants, not absolute values.
+  the kit's `example_bot.py` scores a reported ~1.15 on the track. In this simulator it means
+  **1.90 under `pings`** and **1.42 under `--house-vision vision`** over 48 matches, so the
+  default pings model is roughly **+0.5 to +0.8 score generous** for a passive bot, while the
+  vision model is only ~+0.3 generous. Use paired seeds to compare variants, not absolute values.
 * **The house-bot AI is invented.** We do not have the server's house code. Aim error, reaction,
-  engagement and the shared player track are tuned so the example bot's survival sits in the
+  engagement and the shared-sensing model are tuned so the example bot's survival sits in the
   right ballpark. If the real houses are less coordinated, this sim is harsher; if they hunt
-  harder, it is too kind. The `HOUSE_PING` table in `tools/sim/match.py` is the knob.
+  harder, it is too kind. `HOUSE_PING` in `tools/sim/match.py` and `--house-vision vision` are
+  the knobs; prefer paired runs under both when a tuning decision is close.
 * **Movement is not a full physics clone.** The map walkability grid is `bot/world.py`'s 2 m grid;
   slopes, roof edges, overhang undersides and fine step-up geometry are approximated, and roofs
   are not traversed. Jet/gravity/boost use the protocol constants but not the server solver's
@@ -146,17 +151,67 @@ mech dies because that fixes the score; the remaining houses do not need simulat
 ## Calibration / reference numbers (seed 1, 48 matches, one core)
 
 ```
-example bot  mean score 1.896 (sd 2.47)  mean place 14.10  survival 163.3 s  zone dmg 622
-current bot  mean score 2.333 (sd 3.97)  mean place 13.67  survival 114.3 s  zone dmg 97
+house sensing   bot under test   mean score  mean place  mean survival
+pings (default) example bot           1.896      14.104        163.3 s
+vision          example bot           1.417      14.583        151.2 s
+pings (default) current bot           4.625      11.375        162.7 s
+vision          current bot           3.646      12.354        172.8 s
 ```
 
-The current bot is bimodal: 17x place 16 and 16x place 15 (first or second to die, 25 of 48
-matches end under 90 s, often with 0 cubes) but also 3 wins where it snowballs to 16-29 cubes
-and 1900+ HP. Its early-game survivability against a coordinated hunt is the clear bottleneck;
-navigation/zone discipline is fine (2.2 s average outside the zone, 97 zone damage). Decision
-latency in the final 48-match run was mean 0.35 ms / max 11.9 ms with 0 decisions over the
-50 ms budget (an earlier run against a pre-optimisation `bot/` had a 112.6 ms outlier, so keep
-an eye on the tail as policy code grows).
+
+The current bot row is a moving target: it was measured at `bot/policy.py` hash `68D4EF81FD87`
+(mtime 15:15, uncommitted work by the Lead, git HEAD `a3fd32d`). Earlier the same bot scored
+2.33 (a pre-cover/AI version); re-run the cell after `bot/**` settles if a number will be quoted.
+
+Bimodality persists under the pings model: place 16 or 15 in 22 of 48 matches, but 5 wins where
+it snowballs to 16-29 cubes and 1900+ HP. Mean cubes 1.65. Its early-game survivability against
+a coordinated hunt is the clear bottleneck; navigation/zone discipline is fine (4.2 s average
+outside the zone, 304 zone damage). Decision latency in the final 48-match run was mean 0.2 ms /
+max 6.2 ms with 0 decisions over the 50 ms budget; `bot_fails` was 0.
+
+### House sensing: pings vs vision
+
+`--house-vision {pings,vision}` (default `pings`, so the numbers above and older runs stay
+comparable) selects how the scripted houses know where the player is:
+
+* **pings** (original approximation): houses share a noisy "where is the player" track that
+  refreshes every 6/4/2.5/1.5 s with 70/45/25/12 m of error (keyed to the highest house level
+  still alive), plus the legacy 6 s memory leak. This models "the server houses share sight and
+  hunt the weakest mech" but over-informs them: breaking line of sight never works.
+* **vision** (closer to the stated rule): a house sees the player only through its own alive
+  vision (45 m proximity ring or 120 deg cone within 200 m, buildings block) and every living
+  house shares what any one of them currently sees (union of real sightings). The shared picture
+  is forgotten 3 s after the last sighting; no pings. Houses still never damage each other.
+
+Wiring: `tools/sim/match.py` `HOUSE_PING` (line 33), `Match.__init__(..., house_vision=...)`
+(line 53), `Match.house_think` (line 1119), shared memory `self.house_shared_memory = 3.0`
+(line 61); `tools/eval.py --house-vision`; diagnostics in `Match.finish()` (`house_sight_avg`,
+`house_sight_max`, `house_sight_ever`, `house_pings`, `house_known_frac`, `bot_fails`).
+
+Measured cost of the model choice (48 matches, seed 1, same seeds):
+
+```
+example bot  pings 1.896 -> vision 1.417   (paired vision-pings -0.479, se 0.218)
+current bot  pings 4.625 -> vision 3.646   (paired vision-pings -0.250, se 0.697)
+```
+
+The example bot's real reported score is ~1.15, so the **vision model is closer to the real
+track**; under vision the current bot's win count drops 5 -> 1 and its place histogram compresses
+toward the middle (place 16: 10 -> 7, place 15: 12 -> 9, place 12: 2 -> 8), i.e. it dies less
+first but also stops snowballing. Tuning conclusions about aggression/cover should be re-checked
+under `--house-vision vision`; the pings model makes fleeing pointless by construction.
+
+Sanity probe (`tools/sim/probe_house_vision.py`, a bot that stands still, 8 seed-1 matches):
+
+```
+pings   mean survival 120.0 s (median 139.1, max 235.7), 1.05 houses seeing, 59.8 pings/match
+vision  mean survival 159.8 s (median 188.4, max 208.8), 0.57 houses seeing,  0.0 pings/match
+```
+
+Vision genuinely gates the houses (no pings, fewer simultaneous sightings); the standing target
+survives *longer* under vision because, with omniscient pings, the whole house team converges on
+it immediately.
+
 
 ## How to interpret A/B results
 
@@ -183,6 +238,7 @@ an eye on the tail as policy code grows).
 | `tools/sim/arena.py` | world.json prisms, 3-D ray casts against prisms/terrain, cylinder hits |
 | `tools/sim/zone.py` | zone schedule, circle sampling, in-zone tests |
 | `tools/sim/house.py` | scripted house-bot AI and difficulty levels |
+| `tools/sim/probe_house_vision.py` | standing-target probe: pings vs vision house sensing |
 
 All files are stdlib-only (`math`, `random`, `json`, `gzip`, `time`, `argparse`, ...). Nothing
 under `bot/` or `kit/` is modified; the simulator imports them read-only.

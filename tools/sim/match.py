@@ -50,10 +50,15 @@ def _dist2(ax, ay, bx, by):
 
 class Match:
     def __init__(self, bot, hello, seed, duration=None, no_fire=False, trace_every=20,
-                 collect_events=True):
+                 collect_events=True, house_vision="pings"):
         self.bot = bot
         self.hello = hello
         self.cfg = hello["config"]
+        if house_vision not in ("pings", "vision"):
+            raise ValueError("house_vision must be 'pings' or 'vision', got %r" % (house_vision,))
+        self.house_vision = house_vision
+        # shared sight memory (used only in "vision" mode); pings mode keeps its 6 s leak
+        self.house_shared_memory = 3.0
         self.seed = int(seed)
         self.rng = random.Random((self.seed * 6364136223846793005 + 1442695040888963407) & 0xFFFFFFFFFFFF)
         self.duration = float(duration if duration is not None else self.cfg["match"]["duration_s"])
@@ -102,6 +107,13 @@ class Match:
         self.house_player_seen_t = -1e9
         self.house_player_visible = False
         self.house_ping_t = 0.0
+        # diagnostics proving the house sensing model is actually doing something
+        self.house_sight_samples = 0
+        self.house_sight_house_total = 0
+        self.house_sight_max = 0
+        self.house_sight_ids = set()
+        self.house_ping_count = 0
+        self.house_known_samples = 0
         self.player_seen = {}
         self.player_npc_seen = {}
 
@@ -1106,33 +1118,51 @@ class Match:
     # ================================================================== houses
     def house_think(self):
         if not self.player.alive:
+            self.house_player_visible = False
+            if self.house_vision == "vision":
+                self.house_player_pos = None
             return
-        self.house_player_visible = False
+        # Union of what the living house bots can see this think.  House aim is where their
+        # vision cone points, so this is genuinely LOS/arc gated rather than omniscient.
+        sight = 0
         for ai in self.house_ais:
-            if not ai.mech.alive:
-                continue
-            if self.visible_mech(ai.mech, self.player):
-                self.house_player_visible = True
-                self.house_player_pos = [self.player.pos[0], self.player.pos[1]]
-                self.house_player_seen_t = self.t
-                break
-        if self.house_player_seen_t < self.t - 6.0:
-            self.house_player_pos = None
-        # The real house bots hunt the weakest player mech.  They clearly do not need a
-        # line of sight to know roughly where it is, so model a shared, noisy player
-        # track that refreshes faster and more accurately as the house roster gets harder.
-        if self.player.alive and not self.house_player_visible and self.t >= self.house_ping_t:
-            levels = [ai.level for ai in self.house_ais if ai.mech.alive]
-            lvl = max(levels) if levels else 1
-            interval, noise = HOUSE_PING[lvl]
-            self.house_ping_t = self.t + interval
-            a = self.rng.random() * TAU
-            d = math.sqrt(self.rng.random()) * noise
-            self.house_player_pos = [
-                self.player.pos[0] + math.cos(a) * d,
-                self.player.pos[1] + math.sin(a) * d,
-            ]
+            if ai.mech.alive and self.visible_mech(ai.mech, self.player):
+                sight += 1
+                self.house_sight_ids.add(ai.mech.id)
+        self.house_sight_samples += 1
+        self.house_sight_house_total += sight
+        if sight > self.house_sight_max:
+            self.house_sight_max = sight
+        self.house_player_visible = sight > 0
+        if sight:
+            self.house_player_pos = [self.player.pos[0], self.player.pos[1]]
             self.house_player_seen_t = self.t
+        if self.house_vision == "vision":
+            # Shared sight only: keep the last exact position for a short team memory, then
+            # forget it.  No pings, so cover and breaking line of sight actually work.
+            if self.house_player_seen_t < self.t - self.house_shared_memory:
+                self.house_player_pos = None
+        else:
+            if self.house_player_seen_t < self.t - 6.0:
+                self.house_player_pos = None
+            # The real house bots hunt the weakest player mech.  They clearly do not need a
+            # line of sight to know roughly where it is, so model a shared, noisy player
+            # track that refreshes faster and more accurately as the house roster gets harder.
+            if self.player.alive and not self.house_player_visible and self.t >= self.house_ping_t:
+                levels = [ai.level for ai in self.house_ais if ai.mech.alive]
+                lvl = max(levels) if levels else 1
+                interval, noise = HOUSE_PING[lvl]
+                self.house_ping_t = self.t + interval
+                a = self.rng.random() * TAU
+                d = math.sqrt(self.rng.random()) * noise
+                self.house_player_pos = [
+                    self.player.pos[0] + math.cos(a) * d,
+                    self.player.pos[1] + math.sin(a) * d,
+                ]
+                self.house_player_seen_t = self.t
+                self.house_ping_count += 1
+        if self.house_player_pos is not None:
+            self.house_known_samples += 1
         for ai in self.house_ais:
             if ai.mech.alive:
                 ai.think(self)
@@ -1361,9 +1391,20 @@ class Match:
             "act_ms_max": round(max(act), 3) if act else 0.0,
             "over_budget": int(self.act_over_budget),
             "bot_errors": int(self.bot_errors),
+            "bot_fails": int(getattr(self.bot, "fails", 0)),
             "projectiles_live": len(self.projectiles),
             "npcs_alive": sum(1 for n in self.npcs if n.alive),
             "houses_alive": sum(1 for m in self.mechs if m.house and m.alive),
+            "house_vision": self.house_vision,
+            "house_sight_avg": round(
+                self.house_sight_house_total / self.house_sight_samples, 3
+            ) if self.house_sight_samples else 0.0,
+            "house_sight_max": int(self.house_sight_max),
+            "house_sight_ever": len(self.house_sight_ids),
+            "house_pings": int(self.house_ping_count),
+            "house_known_frac": round(
+                self.house_known_samples / self.house_sight_samples, 3
+            ) if self.house_sight_samples else 0.0,
             "mode": getattr(getattr(self.bot, "policy", None), "mode", None),
             "trace": self.trace,
             "kill_log": self.kill_log,

@@ -18,13 +18,13 @@ import time
 
 CONFIGS = [
     ("base", {}),
-    ("noloot", {"cube_chase": 0, "weapon_chase": 0}),
-    ("heal", {"heal": 1}),
     ("cover", {"cover": 1}),
-    ("evade55", {"evade_hp_frac": 0.55, "evade_aimed_hp": 0.70}),
-    ("trade", {"trade_hp": 0.90, "trade_target_hp": 0.85}),
-    ("eng140", {"engage_dist": 140.0}),
-    ("nofarm", {"farm_threat": 0.0, "crate_threat": 0.0}),
+    ("heal250", {"heal_safe_dist": 250.0}),
+    ("heal97", {"heal_hp": 0.97}),
+    ("healExit", {"heal_hp": 0.70, "heal_exit": 0.99}),
+    ("engage60", {"engage_hp_frac": 0.60}),
+    ("evadeStep120", {"evade_step": 120.0}),
+    ("standoff180", {"standoff": {"gun": 180.0, "laser": 210.0, "mortar": 150.0, "lightning": 28.0}}),
 ]
 
 
@@ -61,6 +61,7 @@ def main():
     ap.add_argument("--out", default="reports/screen1")
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--only", default="")
+    ap.add_argument("--house-vision", default="pings", choices=("pings", "vision"))
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -80,7 +81,8 @@ def main():
             env = dict(os.environ)
             env["MF_POLICY_KNOBS"] = json.dumps(knobs)
             cmd = [args.python, "tools/eval.py", "--matches", str(args.matches),
-                   "--seed", str(args.seed), "--quiet", "--json-out", path]
+                   "--seed", str(args.seed), "--quiet", "--json-out", path,
+                   "--house-vision", args.house_vision]
             running.append((cfg, path, subprocess.Popen(cmd, env=env,
                                                         stdout=subprocess.DEVNULL,
                                                         stderr=subprocess.DEVNULL)))
@@ -116,6 +118,7 @@ def main():
         print(f"{cfg:10s} {n:4d} {score:7.3f} {delta:+7.3f} {sd:6.3f} {wins:5d} {top8:5d} {firsts:6d}")
 
     summary = {"seed": args.seed, "matches": args.matches,
+               "house_vision": args.house_vision,
                "rows": [dict(config=r[0], n=r[1], score=r[2], delta=r[3], sd=r[4],
                              wins=r[5], top8=r[6], last2=r[7]) for r in rows]}
     with open(os.path.join(args.out, f"summary_{args.seed}.json"), "w", encoding="utf-8") as fh:

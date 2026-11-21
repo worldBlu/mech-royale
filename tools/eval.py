@@ -80,11 +80,14 @@ def _make_bot_factory(kind):
 def _fmt_match(i, r):
     return (
         "#%02d seed=%-6d place=%2d score=%5.2f t=%5.1fs end=%-5s hp=%7.1f "
-        "kills=%2d dmg=%7.1f/%7.1f zone=%6.1f out=%5.1fs cubes=%2d act=%5.2fms"
+        "kills=%2d dmg=%7.1f/%7.1f zone=%6.1f out=%5.1fs cubes=%2d act=%5.2fms "
+        "sight=%.2f/%.0f ever=%2d ping=%2d fail=%d"
         % (
             i + 1, r["seed"], r["place"], r["score"], r["t"], r["end"], r["hp_end"],
             r["kills"], r["damage_dealt"], r["damage_taken"], r["zone_damage"],
             r["time_outside_zone"], r["cubes"], r["act_ms_mean"],
+            r["house_sight_avg"], r["house_sight_max"], r["house_sight_ever"],
+            r["house_pings"], r.get("bot_fails", 0),
         )
     )
 
@@ -94,6 +97,9 @@ def main(argv=None):
     ap.add_argument("--matches", type=int, default=8, help="number of matches (default 8)")
     ap.add_argument("--seed", type=int, default=1, help="base seed (default 1)")
     ap.add_argument("--bot", choices=("main", "example"), default="main")
+    ap.add_argument("--house-vision", choices=("pings", "vision"), default="pings",
+                    help="house sensing model: 'pings' (noisy shared hunt track, legacy) or "
+                         "'vision' (only shared line-of-sight + 3 s team memory)")
     ap.add_argument("--knob", action="append", default=[],
                     help="config override, dotted path: vision.range=120")
     ap.add_argument("--variant", choices=VARIANTS, default="",
@@ -152,6 +158,7 @@ def main(argv=None):
             print("duration cap: %.0f s" % (duration if duration is not None else 480.0))
         print("house bots: easy %d / medium %d / hard %d / expert %d"
               % LEVEL_COUNTS)
+        print("house sensing: %s" % args.house_vision)
 
     for i in range(matches):
         seed = args.seed + i * 10007
@@ -170,6 +177,7 @@ def main(argv=None):
             duration=duration,
             no_fire=(args.variant == "no-fire"),
             trace_every=40 if args.quick else 20,
+            house_vision=args.house_vision,
         )
         try:
             result = match.run()
@@ -214,6 +222,7 @@ def main(argv=None):
         "matches": len(results),
         "seed": args.seed,
         "variant": args.variant,
+        "house_vision": args.house_vision,
         "knobs": {p: v for p, v in overrides},
         "duration_cap": duration,
         "summary": summary,
@@ -263,6 +272,11 @@ def _summarize(results, wall):
         "max_act_ms": max(r["act_ms_max"] for r in results),
         "over_budget": sum(r["over_budget"] for r in results),
         "bot_errors": sum(r["bot_errors"] for r in results),
+        "bot_fails": sum(r.get("bot_fails", 0) for r in results),
+        "house_vision": results[0].get("house_vision"),
+        "mean_house_sight_avg": round(sum(r["house_sight_avg"] for r in results) / n, 3),
+        "max_house_sight": max(r["house_sight_max"] for r in results),
+        "mean_house_pings": round(sum(r["house_pings"] for r in results) / n, 2),
         "wall_s": round(wall, 2),
         "sec_per_match": round(wall / n, 2),
         "places": {str(p): places.count(p) for p in sorted(set(places))},
@@ -280,8 +294,13 @@ def _print_summary(s, results):
           % (s["mean_kills"], s["mean_damage_dealt"], s["mean_damage_taken"], s["mean_zone_damage"]))
     print("  zone exposure   : %.2f s outside, %.1f zone damage" % (s["mean_time_outside_zone"], s["mean_zone_damage"]))
     print("  cubes picked    : %.2f" % s["mean_cubes"])
-    print("  bot decision    : mean %.2f ms, max %.2f ms, over 50 ms: %d, errors: %d"
-          % (s["mean_act_ms"], s["max_act_ms"], s["over_budget"], s["bot_errors"]))
+    print("  house sensing   : %s, sight avg %.2f houses (max %d), pings %.1f/match"
+          % (s["house_vision"], s["mean_house_sight_avg"], s["max_house_sight"],
+             s["mean_house_pings"]))
+    print("  bot decision    : mean %.2f ms, max %.2f ms, over 50 ms: %d, errors: %d, "
+          "policy fallbacks: %d"
+          % (s["mean_act_ms"], s["max_act_ms"], s["over_budget"], s["bot_errors"],
+             s["bot_fails"]))
     print("  wall            : %.1f s total, %.2f s/match" % (s["wall_s"], s["sec_per_match"]))
     print("  placements      : " + ", ".join("%s:%d" % (k, v) for k, v in s["places"].items()))
 

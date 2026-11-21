@@ -19,20 +19,20 @@ KNOBS = {
     "engage_hp_frac": 0.45,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 0.35,      # running away when a fresh hostile is close
-    "evade_dist": 130.0,
-    "evade_aimed_hp": 0.55,     # someone is pointing a weapon at us
+    "evade_hp_frac": 0.45,      # running away when a fresh hostile is close
+    "evade_dist": 160.0,
+    "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
     "farm_threat": 140.0,
     "crate_threat": 150.0,
     "loot_threat": 60.0,
     "boost_energy": 22.0,
-    "cover": 0,                 # rotate toward scenery that blocks lines of sight
-    "heal": 0,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 0.85,            # start healing below this fraction
+    "cover": 1,                 # rotate toward scenery that blocks lines of sight
+    "heal": 1,                  # break contact and let the 45/s regen top us up
+    "heal_hp": 0.90,            # start healing below this fraction
     "heal_exit": 0.97,          # stop at this fraction
-    "heal_safe_dist": 150.0,    # only heal when the nearest fresh hostile is farther
+    "heal_safe_dist": 200.0,    # only heal when the nearest fresh hostile is farther
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
     "evade_sticky": 3.0,        # keep running this long after the trigger clears
@@ -104,16 +104,23 @@ class Policy:
         max_hp = max(1.0, float(me["max_hp"]))
         hp_frac = hp / max_hp
         hostiles = self.perc.hostiles(t, 250.0)
-        threat = hostiles[0][1] if hostiles else None
-        threat_d = hostiles[0][0] if hostiles else 1e9
-        if self.k.get("target_weak") and hostiles:
-            cands = [h for h in hostiles if (t - h[1].seen) < 0.6 and h[0] < self.k["engage_dist"]]
+        # A remembered-but-stale track is not a threat we can fight or run from: only
+        # currently visible mechs drive the fight/evade decisions. Mixing the two left the
+        # bot rotating aimlessly while a visible mech shot it from 90 m.
+        fresh_hostiles = [(d, tr) for d, tr in hostiles if (t - tr.seen) < 0.5]
+        threat = fresh_hostiles[0][1] if fresh_hostiles else None
+        threat_d = fresh_hostiles[0][0] if fresh_hostiles else 1e9
+        ghost = None
+        if hostiles and (t - hostiles[0][1].seen) >= 0.5:
+            ghost = hostiles[0]
+        if self.k.get("target_weak") and fresh_hostiles:
+            cands = [h for h in fresh_hostiles if h[0] < self.k["engage_dist"]]
             if cands:
                 def _hp(h):
                     hp = getattr(h[1], "hp", None)
                     return hp if hp and hp > 0.0 else 1e9
                 threat_d, threat = min(cands, key=lambda h: _hp(h))
-        fresh = threat is not None and (t - threat.seen) < 0.4
+        fresh = threat is not None
 
         zone = obs["zone"]
         in_zone = bool(me.get("in_zone", True))
@@ -150,6 +157,8 @@ class Policy:
             (hp_frac < k["evade_hp_frac"] and fresh and threat_d < k["evade_dist"])
             or (hp_frac < k["evade_aimed_hp"] and aimed > 0 and threat_d < k["evade_aimed_dist"])
             or (hp_frac < 0.5 and fresh and threat_d < 110.0)
+            # a ghost that vanished behind cover 3 s ago is still worth backing away from
+            or (ghost is not None and hp_frac < 0.5 and ghost[0] < 55.0)
         )
         if evade:
             self.evade_until = max(self.evade_until, t + float(k["evade_sticky"]))
@@ -628,3 +637,4 @@ class Policy:
                 best_s = s
                 best_i = i
         return best_i
+
