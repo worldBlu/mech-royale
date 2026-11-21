@@ -39,7 +39,8 @@ class Bot:
         self.nav = Navigator(self.world)
         self.perc = Perception(self.world, cfg)
         self.combat = Combat(self.world, cfg)
-        self.policy = Policy(self.world, self.nav, self.perc, self.combat, cfg)
+        self.policy = Policy(self.world, self.nav, self.perc, self.combat, cfg,
+                             seed=int(hello.get("seed") or 0))
         self.fails = 0
 
     def act(self, obs):

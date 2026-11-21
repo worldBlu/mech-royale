@@ -11,6 +11,10 @@ import random
 KIND_VALUE = {"laser": 3.0, "mortar": 2.0, "lightning": 2.2, "gun": 0.2}
 
 
+def _ang_diff(a, b):
+    return (a - b + math.pi) % (2.0 * math.pi) - math.pi
+
+
 class Policy:
     def __init__(self, world, nav, perc, combat, cfg, seed=0):
         self.w = world
@@ -68,10 +72,14 @@ class Policy:
         take_id, take_goal = self._pickup_step(obs, me, pos, threat_d, t)
 
         # --- supply drop
-        drop_goal, drop_id = self._drop_step(obs, pos, hp_frac, threat_d, t)
+        drop_goal, drop_id = self._drop_step(obs, pos, hp_frac, threat_d, t, int(me.get("cubes") or 0))
 
         # --- cube
         cube_goal = self._cube_step(obs, pos, hp_frac, threat_d)
+
+        # --- farmable NPC drones and crates (cubes behind both)
+        npc_d, npc_tr = self._npc_step(obs, t, threat_d, hp_frac)
+        crate = self._crate_step(obs, pos, threat_d)
 
         mode = "ROTATE"
         goal = None
@@ -93,6 +101,12 @@ class Policy:
         elif threat is not None and fresh and threat_d < 200.0 and hp_frac > 0.4:
             mode = "FIGHT"
             goal = self._fight_goal(pos, threat, threat_d, t)
+        elif npc_tr is not None:
+            mode = "FARM"
+            goal = self._farm_goal(pos, npc_tr, npc_d)
+        elif crate is not None:
+            mode = "FARM"
+            goal = self._crate_goal(pos, crate)
         else:
             mode = "ROTATE"
             goal = self._rotate_goal(obs, pos, zone_center, next_center, next_r)
@@ -130,6 +144,10 @@ class Policy:
         combat_out = {}
         if threat is not None and fresh:
             combat_out = self.combat.decide(obs, threat, t)
+        elif npc_tr is not None:
+            combat_out = self.combat.decide(obs, npc_tr, t)
+        elif crate is not None:
+            combat_out = self._shoot_crate(obs, crate)
         if combat_out:
             aim = combat_out.get("aim")
             for k in ("fire", "reload"):
@@ -251,37 +269,112 @@ class Policy:
             return None
         return (best["pos"][0], best["pos"][1])
 
-    def _drop_step(self, obs, pos, hp_frac, threat_d, t):
+    def _drop_step(self, obs, pos, hp_frac, threat_d, t, cubes=0):
         best = None
         best_d = 1e9
         for drop in obs.get("drops") or []:
             lands_in = float(drop.get("lands_in") or 0.0)
-            if lands_in > 1.0:
+            d = math.dist(drop["pos"][:2], pos[:2])
+            if d > 210.0:
+                continue
+            # give up on a drop we cannot reach before it lands (fall time is 25 s)
+            if lands_in > d / 18.0 + 1.0:
+                continue
+            if lands_in > 3.0 and d > 60.0:
+                continue
+            if hp_frac > 0.92 and int(cubes) >= 9 and lands_in > 0.5:
                 continue
             holder = drop.get("holder")
-            if holder is not None:
-                continue
-            d = math.dist(drop["pos"][:2], pos[:2])
-            if d > 190.0:
-                continue
-            if hp_frac > 0.8 and int(drop.get("cubes") or 0) < 9:
-                continue
-            # contested: someone else is already standing in the ring
-            contested = False
-            for tr in self.perc.tracks.values():
-                if tr.kind == "mech" and math.dist((tr.x, tr.y), drop["pos"][:2]) < 14.0:
-                    contested = True
-                    break
-            if contested and threat_d < 140.0:
+            contested = holder is not None
+            if not contested:
+                for tr in self.perc.tracks.values():
+                    if tr.kind == "mech" and math.dist((tr.x, tr.y), drop["pos"][:2]) < 10.0:
+                        contested = True
+                        break
+            if contested and threat_d < 160.0 and d > 25.0:
                 continue
             if d < best_d:
                 best_d = d
                 best = drop
         if best is None:
             return None, None
-        if best_d > 8.0 and threat_d < best_d * 0.8 and threat_d < 110.0:
+        if best_d > 8.0 and threat_d < best_d * 0.7 and threat_d < 110.0:
             return None, None
         return (best["pos"][0], best["pos"][1]), best["id"]
+
+    # ------------------------------------------------------------------ farming
+    def _npc_step(self, obs, t, threat_d, hp_frac):
+        """Drones wander close and drop two cubes; farm one when nothing else is urgent."""
+        if hp_frac < 0.5 or threat_d < 140.0:
+            return 1e9, None
+        best = None
+        best_d = 1e9
+        for d, tr in self.perc.npcs(t, 95.0):
+            if t - tr.seen > 0.5:
+                continue
+            if d < best_d:
+                best_d = d
+                best = tr
+        if best is None:
+            return 1e9, None
+        return best_d, best
+
+    def _crate_step(self, obs, pos, threat_d):
+        if threat_d < 150.0:
+            return None
+        gslot = self.combat.holding(obs["self"], "gun")
+        if gslot is None:
+            return None
+        w = obs["self"]["weapons"][gslot]
+        if float(w.get("ammo", 0)) < 4 and float(w.get("reload", 0)) <= 0.0:
+            return None
+        best = None
+        best_d = 1e9
+        for c in obs.get("crates") or []:
+            d = math.dist(c["pos"][:2], pos[:2])
+            if d > 95.0 or d < 6.0:
+                continue
+            if d < best_d and self.w.has_los(pos[0], pos[1], c["pos"][0], c["pos"][1]):
+                best_d = d
+                best = c
+        return best
+
+    def _farm_goal(self, pos, tr, d):
+        want = 45.0
+        if d > want + 10.0:
+            return (tr.x, tr.y)
+        if d < want - 10.0:
+            ang = math.atan2(pos[1] - tr.y, pos[0] - tr.x)
+            return (pos[0] + math.cos(ang) * 25.0, pos[1] + math.sin(ang) * 25.0)
+        ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + math.pi * 0.5
+        return (pos[0] + math.cos(ang) * 12.0, pos[1] + math.sin(ang) * 12.0)
+
+    def _crate_goal(self, pos, crate):
+        ang = math.atan2(pos[1] - crate["pos"][1], pos[0] - crate["pos"][0])
+        return (crate["pos"][0] + math.cos(ang) * 28.0, crate["pos"][1] + math.sin(ang) * 28.0)
+
+    def _shoot_crate(self, obs, crate):
+        me = obs["self"]
+        slot = self.combat.holding(me, "gun")
+        if slot is None:
+            return {}
+        w = me["weapons"][slot]
+        if float(w.get("ammo", 0)) <= 0.0:
+            return {"reload": True} if float(w.get("reload", 0)) <= 0.0 else {}
+        mx, my, mz = me["pos"]
+        cx, cy, cz = crate["pos"]
+        horiz = math.hypot(cx - mx, cy - my)
+        if not self.w.has_los(mx, my, cx, cy):
+            return {}
+        muz = float((me.get("stats") or {}).get("muzzle_height", 6.5))
+        yaw = math.atan2(cy - my, cx - mx)
+        pitch = math.atan2(cz + 1.2 - (mz + muz), max(1.0, horiz))
+        out = {"aim": [yaw, pitch]}
+        if abs(_ang_diff(yaw, me["aim"][0])) < max(0.012, math.atan2(1.6, max(12.0, horiz))):
+            fire = [False] * len(me["weapons"])
+            fire[slot] = True
+            out["fire"] = fire
+        return out
 
     # ------------------------------------------------------------------ fight
     def _fight_goal(self, pos, tr, d, t):
