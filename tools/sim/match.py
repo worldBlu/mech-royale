@@ -65,6 +65,9 @@ class Match:
         self.house_preset_name = house_preset
         self.house_preset = dict(PRESETS[house_preset])
         self.house_sense = dict(self.house_preset.get("sense") or {})
+        # optional global outgoing-damage multiplier for house mechs (models coordinated
+        # focus fire / the real squads' higher sustained DPS better than per-shot accuracy)
+        self.house_damage_scale = float(self.house_preset.get("level", {}).get("damage_scale", 1.0))
         if house_sense:
             self.house_sense.update({k: float(v) for k, v in house_sense.items()})
         # shared sight memory (used only in "vision" mode); pings mode keeps its 6 s leak
@@ -391,6 +394,9 @@ class Match:
             if not target.alive:
                 return
             dmg = float(amount)
+            if (isinstance(source, Mech) and source.house and target is not source
+                    and weapon != "zone"):
+                dmg *= self.house_damage_scale
             if weapon != "zone":
                 dmg *= 1.0 - float(target.stats.get("armor", 0.0))
                 if rear:

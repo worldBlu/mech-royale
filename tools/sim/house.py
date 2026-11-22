@@ -78,8 +78,9 @@ PRESETS = {
             "blind_mortar": 1,
             "converge_boost_energy": 6.0,
             "secondary_scale": 2.00,
+            "damage_scale": 1.08,
         },
-        "sense": {"shared_memory": 25.0, "ping_interval": 1.0, "ping_noise": 5.0},
+        "sense": {"shared_memory": 40.0, "ping_interval": 0.7, "ping_noise": 2.0},
     },
 }
 
