@@ -1,4 +1,4 @@
-"""Behaviour: zone discipline, looting, fighting and escaping.
+﻿"""Behaviour: zone discipline, looting, fighting and escaping.
 
 Ranking only cares about surviving to the end, so the policy spends the early match on
 power cubes and a second weapon, keeps itself inside the shrinking circle, and avoids
@@ -33,8 +33,8 @@ KNOBS = {
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 0.95,            # start healing below this fraction
-    "heal_exit": 0.99,          # stop at this fraction
+    "heal_hp": 0.60,            # start healing below this fraction
+    "heal_exit": 0.80,          # stop at this fraction
     "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
     "heal_los": 0,              # heal whenever nobody can see us, distance regardless
     "heal_los_dist": 200.0,     # only consider hostiles this close for the LOS test
@@ -45,6 +45,7 @@ KNOBS = {
     "dodge": 1,                 # side-step shells that are about to pass through us
     "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
     "rush_dist": 170.0,         # only chase gear this far
+    "weapon_r": 150.0,          # grab a spare weapon from this far away (it doubles our damage)
     "finish_hp": 0.90,           # close in and finish targets below this hp fraction
     "finish_d": 35.0,           # preferred range while finishing
     "chase": 1,                 # keep pushing a wounded target that slipped out of sight
@@ -57,10 +58,10 @@ KNOBS = {
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
     "standoff": {"gun": 100.0, "laser": 150.0, "mortar": 150.0, "lightning": 28.0},
-    "fight_pos": 1,             # score fight positions instead of blind strafing
+    "fight_pos": 0,             # score fight positions instead of blind strafing
     "observer_penalty": 25.0,   # cost of standing where another mech can see us
-    "peek": 1,                  # break line of sight while the primary weapon is not ready
-    "retaliate": 1,             # shoot whoever shot us last, not just the weakest mech
+    "peek": 0,                  # break line of sight while the primary weapon is not ready
+    "retaliate": 0,             # shoot whoever shot us last, not just the weakest mech
 }
 
 
@@ -267,9 +268,6 @@ class Policy:
             goal = self._fight_goal(
                 pos, threat, threat_d, t, me, fresh_hostiles, zone_center, zr
             )
-        elif camp_goal is not None:
-            mode = "CAMP"
-            goal = None if camp_arrived else camp_goal
         elif rush_goal is not None:
             mode = "RUSH"
             goal = rush_goal
@@ -282,7 +280,7 @@ class Policy:
                 pos[0] + math.cos(self.rng.uniform(0.0, 2.0 * math.pi)) * 30.0,
                 pos[1] + math.sin(self.rng.uniform(0.0, 2.0 * math.pi)) * 30.0,
             )
-        elif take_goal is not None and threat_d > 60.0:
+        elif take_goal is not None and threat_d > 40.0:
             mode = "LOOT"
             goal = take_goal
         elif cube_goal is not None:
@@ -302,6 +300,11 @@ class Policy:
         elif crate is not None:
             mode = "FARM"
             goal = self._crate_goal(pos, crate)
+        elif camp_goal is not None:
+            # Camping is a fallback posture, not a priority: it used to sit above the loot
+            # branches, which silently starved weapon pickups and cube collection.
+            mode = "CAMP"
+            goal = None if camp_arrived else camp_goal
         else:
             mode = "ROTATE"
             goal = self._rotate_goal(obs, pos, zone_center, next_center, next_r)
@@ -485,12 +488,13 @@ class Policy:
             return None, None
         best = None
         best_s = -1.0
+        reach = float(self.k.get("weapon_r") or 150.0)
         for p in obs.get("pickups") or []:
             kind = p.get("kind")
             if kind is None or kind == "gun":
                 continue
             d = math.dist(p["pos"][:2], pos[:2])
-            if d > 90.0:
+            if d > reach:
                 continue
             s = KIND_VALUE.get(kind, 0.0) * 100.0 - d
             if kind == "mortar":
@@ -500,7 +504,7 @@ class Policy:
                 best = p
         if best is None:
             return None, None
-        if threat_d < 35.0:
+        if threat_d < 25.0:
             return None, None
         return best["id"], (best["pos"][0], best["pos"][1])
 

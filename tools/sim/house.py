@@ -60,12 +60,40 @@ DEFAULT_SKILL = {
     "converge": 1.0,
 }
 
+# Named presets.  "calibrated" is the default (LEVELS above, no team ping in vision mode).
+# "harsh" models the builders-4 evidence: the private-scorer houses keep a stale lock on a
+# mech for many seconds after it breaks line of sight (union of pings + last exact position),
+# converge in a straight line with boost, and shoot noticeably straighter.  It is the preset
+# to use when screening passive/camping policies, which the real houses punish.
+PRESETS = {
+    "calibrated": {"level": {}, "sense": {"shared_memory": 3.0}},
+    "harsh": {
+        "level": {
+            "aim_sigma_scale": 0.72,
+            "fire_tol_scale": 0.80,
+            "react_scale": 0.45,
+            "engage_add": 20.0,
+            "pref_scale": 0.50,
+            "converge_boost_energy": 8.0,
+        },
+        "sense": {"shared_memory": 18.0, "ping_interval": 1.8, "ping_noise": 10.0},
+    },
+}
+
 
 class HouseAI:
-    def __init__(self, mech, level, rng, skill=None):
+    def __init__(self, mech, level, rng, skill=None, preset=None):
         self.mech = mech
         self.level = level
         self.cfg = dict(LEVELS[level])
+        preset = preset or {}
+        for key, val in (preset.get("level") or {}).items():
+            if key.endswith("_scale") and key[:-6] in self.cfg:
+                self.cfg[key[:-6]] = float(self.cfg[key[:-6]]) * float(val)
+            elif key.endswith("_add") and key[:-4] in self.cfg:
+                self.cfg[key[:-4]] = float(self.cfg[key[:-4]]) + float(val)
+            else:
+                self.cfg[key] = val
         if skill:
             self.cfg.update(skill)
         self.rng = rng
@@ -207,7 +235,8 @@ class HouseAI:
             if dist > pref + 30.0:
                 self._toward(mech, known[0], known[1], 5.0, cfg["converge"])
                 # converge faster: houses boost towards a shared sighting when far away
-                boost = bool(cfg.get("converge_boost", 1.0)) and dist > 60.0 and mech.energy > 25.0
+                boost = (bool(cfg.get("converge_boost", 1.0)) and dist > 60.0
+                         and mech.energy > float(cfg.get("converge_boost_energy", 25.0)))
             elif dist < pref - 32.0:
                 self._set_move(mech, -dx, -dy, cfg["converge"])
             else:

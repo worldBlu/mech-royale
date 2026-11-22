@@ -104,6 +104,12 @@ def main(argv=None):
     ap.add_argument("--house-vision", choices=("pings", "vision"), default="pings",
                     help="house sensing model: 'pings' (noisy shared hunt track, legacy) or "
                          "'vision' (only shared line-of-sight + 3 s team memory)")
+    ap.add_argument("--house-preset", choices=("calibrated", "harsh"), default="calibrated",
+                    help="house skill/sensing preset: 'calibrated' (default) or 'harsh' "
+                         "(long stale lock + team pings + better aim, for screening passive play)")
+    ap.add_argument("--house-sense", action="append", default=[], metavar="KEY=VALUE",
+                    help="override a house sensing number (shared_memory, ping_interval, "
+                         "ping_noise); mainly for calibration sweeps")
     ap.add_argument("--knob", action="append", default=[],
                     help="config override, dotted path: vision.range=120")
     ap.add_argument("--house-knob", action="append", default=[],
@@ -164,6 +170,20 @@ def main(argv=None):
         except ValueError:
             ap.error("--house-knob %s expects a number, got %r" % (key, val))
 
+    house_sense = {}
+    for raw in args.house_sense:
+        if "=" not in raw:
+            ap.error("--house-sense expects key=value, got %r" % raw)
+        key, val = raw.split("=", 1)
+        key = key.strip()
+        if key not in ("shared_memory", "ping_interval", "ping_noise"):
+            ap.error("unknown house sensing knob %r (choose from: shared_memory, "
+                     "ping_interval, ping_noise)" % key)
+        try:
+            house_sense[key] = float(val)
+        except ValueError:
+            ap.error("--house-sense %s expects a number, got %r" % (key, val))
+
     factory = _make_bot_factory(args.bot, args.bot_dir)
     t_start = time.time()
     results = []
@@ -180,9 +200,11 @@ def main(argv=None):
             print("duration cap: %.0f s" % (duration if duration is not None else 480.0))
         print("house bots: easy %d / medium %d / hard %d / expert %d"
               % LEVEL_COUNTS)
-        print("house sensing: %s" % args.house_vision)
+        print("house sensing: %s, preset: %s" % (args.house_vision, args.house_preset))
         if house_skill:
             print("house skill: " + ", ".join("%s=%g" % kv for kv in sorted(house_skill.items())))
+        if house_sense:
+            print("house sense: " + ", ".join("%s=%g" % kv for kv in sorted(house_sense.items())))
 
     for i in range(matches):
         seed = args.seed + i * 10007
@@ -203,6 +225,8 @@ def main(argv=None):
             trace_every=40 if args.quick else 20,
             house_vision=args.house_vision,
             house_skill=house_skill,
+            house_preset=args.house_preset,
+            house_sense=house_sense,
         )
         try:
             result = match.run()
@@ -248,6 +272,8 @@ def main(argv=None):
         "seed": args.seed,
         "variant": args.variant,
         "house_vision": args.house_vision,
+        "house_preset": args.house_preset,
+        "house_sense": house_sense,
         "house_skill": house_skill,
         "knobs": {p: v for p, v in overrides},
         "duration_cap": duration,

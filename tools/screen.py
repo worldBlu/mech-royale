@@ -18,12 +18,12 @@ import time
 
 CONFIGS = [
     ("base", {}),
-    ("frac40", {"camp_frac": 0.40}),
-    ("frac85", {"camp_frac": 0.85}),
-    ("healFull", {"heal_hp": 1.0, "heal_exit": 1.0, "heal_safe_dist": 300.0}),
-    ("evade70", {"evade_hp_frac": 0.70, "evade_dist": 200.0}),
-    ("leave20", {"camp_leave": 20.0}),
-    ("noRush", {"rush_s": 0.0}),
+    ("noPeek", {"peek": 0}),
+    ("noFightPos", {"fight_pos": 0}),
+    ("noRetaliate", {"retaliate": 0}),
+    ("campOff", {"camp": 0}),
+    ("allOff", {"peek": 0, "fight_pos": 0, "retaliate": 0}),
+    ("pen60", {"observer_penalty": 60.0}),
 ]
 
 

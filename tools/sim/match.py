@@ -21,7 +21,7 @@ from . import kitcfg, loader
 from .arena import Arena
 from .combat import CombatEngine, ang_diff
 from .entities import Mech, Npc, Projectile
-from .house import HouseAI, LEVEL_COUNTS
+from .house import HouseAI, LEVEL_COUNTS, PRESETS
 from .zone import Zone
 
 TAU = 2.0 * math.pi
@@ -50,16 +50,25 @@ def _dist2(ax, ay, bx, by):
 
 class Match:
     def __init__(self, bot, hello, seed, duration=None, no_fire=False, trace_every=20,
-                 collect_events=True, house_vision="pings", house_skill=None):
+                 collect_events=True, house_vision="pings", house_skill=None,
+                 house_preset="calibrated", house_sense=None):
         self.bot = bot
         self.hello = hello
         self.cfg = hello["config"]
         if house_vision not in ("pings", "vision"):
             raise ValueError("house_vision must be 'pings' or 'vision', got %r" % (house_vision,))
+        if house_preset not in PRESETS:
+            raise ValueError("house_preset must be one of %s, got %r"
+                             % (sorted(PRESETS), house_preset))
         self.house_vision = house_vision
         self.house_skill = dict(house_skill or {})
+        self.house_preset_name = house_preset
+        self.house_preset = dict(PRESETS[house_preset])
+        self.house_sense = dict(self.house_preset.get("sense") or {})
+        if house_sense:
+            self.house_sense.update({k: float(v) for k, v in house_sense.items()})
         # shared sight memory (used only in "vision" mode); pings mode keeps its 6 s leak
-        self.house_shared_memory = 3.0
+        self.house_shared_memory = float(self.house_sense.get("shared_memory", 3.0))
         self.seed = int(seed)
         self.rng = random.Random((self.seed * 6364136223846793005 + 1442695040888963407) & 0xFFFFFFFFFFFF)
         self.duration = float(duration if duration is not None else self.cfg["match"]["duration_s"])
@@ -187,7 +196,7 @@ class Match:
                 if m.holding(kind) is None:
                     m.give_weapon(kind, 0.0)
             self.mechs.append(m)
-            ai = HouseAI(m, level, self.rng, self.house_skill)
+            ai = HouseAI(m, level, self.rng, self.house_skill, preset=self.house_preset)
             ai.last_pos = (m.pos[0], m.pos[1])
             self.house_ais.append(ai)
 
@@ -1140,9 +1149,23 @@ class Match:
             self.house_player_seen_t = self.t
         if self.house_vision == "vision":
             # Shared sight only: keep the last exact position for a short team memory, then
-            # forget it.  No pings, so cover and breaking line of sight actually work.
+            # forget it.  The harsh preset keeps a much longer stale lock and adds noisy team
+            # pings, so breaking line of sight slows the hunt down instead of ending it.
             if self.house_player_seen_t < self.t - self.house_shared_memory:
                 self.house_player_pos = None
+            ping_interval = self.house_sense.get("ping_interval")
+            if (ping_interval and self.player.alive and not self.house_player_visible
+                    and self.t >= self.house_ping_t):
+                self.house_ping_t = self.t + float(ping_interval)
+                noise = float(self.house_sense.get("ping_noise", 14.0))
+                a = self.rng.random() * TAU
+                d = math.sqrt(self.rng.random()) * noise
+                self.house_player_pos = [
+                    self.player.pos[0] + math.cos(a) * d,
+                    self.player.pos[1] + math.sin(a) * d,
+                ]
+                self.house_player_seen_t = self.t
+                self.house_ping_count += 1
         else:
             if self.house_player_seen_t < self.t - 6.0:
                 self.house_player_pos = None
@@ -1397,6 +1420,8 @@ class Match:
             "npcs_alive": sum(1 for n in self.npcs if n.alive),
             "houses_alive": sum(1 for m in self.mechs if m.house and m.alive),
             "house_vision": self.house_vision,
+            "house_preset": self.house_preset_name,
+            "house_sense": dict(self.house_sense),
             "house_sight_avg": round(
                 self.house_sight_house_total / self.house_sight_samples, 3
             ) if self.house_sight_samples else 0.0,
