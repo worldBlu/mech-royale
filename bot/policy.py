@@ -34,7 +34,7 @@ KNOBS = {
     "heal_exit": 0.97,          # stop at this fraction
     "jink": 1,                   # weave while moving so their gun has to lead a wobbly target
     "jink_frac": 0.55,
-    "jink_hz": 1.35,
+    "jink_hz": 1.1,
     "jink_dist": 320.0,
     "panic_dmg": 1e9,          # armor lost per second that makes us break contact
     "panic_s": 2.5,              # how long that duck-out lasts
