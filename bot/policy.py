@@ -35,7 +35,7 @@ KNOBS = {
     "jink": 1,                   # weave while moving so their gun has to lead a wobbly target
     "jink_frac": 0.55,
     "jink_hz": 1.1,
-    "jink_dist": 260.0,
+    "jink_dist": 320.0,
     "panic_dmg": 1e9,          # armor lost per second that makes us break contact
     "panic_s": 2.5,              # how long that duck-out lasts
     "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
@@ -47,7 +47,7 @@ KNOBS = {
     "dodge": 1,                 # side-step shells that are about to pass through us
     "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
     "rush_dist": 170.0,
-    "weapon_r": 200.0,          # weapons worth a detour even while a fight is near
+    "weapon_r": 150.0,          # weapons worth a detour even while a fight is near
     "weapon_threat": 25.0,      # never turn our back on a hostile this close to grab one         # only chase gear this far
     "finish_hp": 0.90,           # close in and finish targets below this hp fraction
     "finish_d": 35.0,           # preferred range while finishing
