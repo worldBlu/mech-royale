@@ -484,30 +484,77 @@ class World:
         return True
 
     def path_clear(self, x0, y0, x1, y1):
-        """Can the mech walk straight from A to B on the walk grid?"""
+        """Can the mech walk straight from A to B on the walk grid?
+
+        Exact cell traversal (DDA), not point sampling: every 2 m cell the segment passes
+        through is checked, so a verified leg cannot clip a blocked cell at a corner between
+        samples. The traversed cells of a sub-leg are a subset of the full leg's, so a
+        direction verified from one position stays valid at every point on that line --
+        which is what steering relies on between replans.
+        """
         dx = x1 - x0
         dy = y1 - y0
-        dist = math.hypot(dx, dy)
-        if dist < 0.5:
+        if dx * dx + dy * dy < 0.25:
             return True
-        steps = int(dist / (CELL * 0.25)) + 1
-        sx = dx / steps
-        sy = dy / steps
-        x = x0
-        y = y0
-        nx, ny = self.nx, self.ny
+        nx = self.nx
+        ny = self.ny
         walk = self.walk
-        minx, miny = self.min_x, self.min_y
-        for _ in range(steps):
-            x += sx
-            y += sy
-            i = int((x - minx) / CELL)
-            j = int((y - miny) / CELL)
+        minx = self.min_x
+        miny = self.min_y
+        ux = (x0 - minx) / CELL
+        uy = (y0 - miny) / CELL
+        vx = (x1 - minx) / CELL
+        vy = (y1 - miny) / CELL
+        i = int(ux)
+        j = int(uy)
+        i1 = int(vx)
+        j1 = int(vy)
+        if i < 0 or j < 0 or i >= nx or j >= ny or i1 < 0 or j1 < 0 or i1 >= nx or j1 >= ny:
+            return False
+        if walk[j * nx + i] or walk[j1 * nx + i1]:
+            return False
+        if i == i1 and j == j1:
+            return True
+        dux = vx - ux
+        duy = vy - uy
+        if dux > 0.0:
+            step_i = 1
+            tx = (i + 1 - ux) / dux
+            tdx = 1.0 / dux
+        elif dux < 0.0:
+            step_i = -1
+            tx = (ux - i) / -dux
+            tdx = -1.0 / dux
+        else:
+            step_i = 0
+            tx = 2.0
+            tdx = 0.0
+        if duy > 0.0:
+            step_j = 1
+            ty = (j + 1 - uy) / duy
+            tdy = 1.0 / duy
+        elif duy < 0.0:
+            step_j = -1
+            ty = (uy - j) / -duy
+            tdy = -1.0 / duy
+        else:
+            step_j = 0
+            ty = 2.0
+            tdy = 0.0
+        for _ in range(abs(i1 - i) + abs(j1 - j)):       # bounded by the cell distance
+            if tx < ty:
+                i += step_i
+                tx += tdx
+            else:
+                j += step_j
+                ty += tdy
             if i < 0 or j < 0 or i >= nx or j >= ny:
                 return False
             if walk[j * nx + i]:
                 return False
-        return True
+            if i == i1 and j == j1:
+                return True
+        return False
 
     def nearest_walkable(self, x, y, max_r=20.0):
         """Closest walkable cell centre to (x, y), or None."""

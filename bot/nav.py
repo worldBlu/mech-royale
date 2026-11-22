@@ -387,20 +387,23 @@ class Navigator:
             self.goal = goal
             self.t_path = now
         px, py = pos[0], pos[1]
+        w = self.w
+        si, sj = w.cell_of(px, py)
+        start_blocked = bool(w.walk[sj * w.nx + si])
         # Drop waypoints we already stand on -- but only while the leg to the *next* one is
         # verified too. Standing 2 m short of a corner waypoint and cutting straight to the
         # waypoint after it is how the old steer could clip a wall corner.
         popped = False
         while self.path and math.dist(self.path[0], (px, py)) < 2.2:
-            if len(self.path) > 1 and not self.w.path_clear(
-                    px, py, self.path[1][0], self.path[1][1]):
+            if (not start_blocked and len(self.path) > 1 and not self.w.path_clear(
+                    px, py, self.path[1][0], self.path[1][1])):
                 break
             self.path.pop(0)
             popped = True
         if not self.path:
             return self._fallback_aim(pos, goal)
         tx, ty = self.path[0]
-        if popped and not self.w.path_clear(px, py, tx, ty):
+        if popped and not start_blocked and not self.w.path_clear(px, py, tx, ty):
             # The mech is off the verified line (usually right after a dropped waypoint):
             # reroute from where it actually is instead of steering through the corner.
             self.path = self.plan(pos, goal)
@@ -410,7 +413,7 @@ class Navigator:
             if not self.path:
                 return self._fallback_aim(pos, goal)
             tx, ty = self.path[0]
-            if not self.w.path_clear(px, py, tx, ty):
+            if not start_blocked and not self.w.path_clear(px, py, tx, ty):
                 return (0.0, 0.0, math.dist(goal, (px, py)))
         dx = tx - px
         dy = ty - py
