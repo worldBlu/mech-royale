@@ -30,12 +30,12 @@ KNOBS = {
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 0.60,            # start healing below this fraction
-    "heal_exit": 0.75,          # stop at this fraction
+    "heal_hp": 0.95,            # start healing below this fraction
+    "heal_exit": 0.97,          # stop at this fraction
     "jink": 1,                   # weave while moving so their gun has to lead a wobbly target
     "jink_frac": 0.55,
     "jink_hz": 1.1,
-    "jink_dist": 260.0,
+    "jink_dist": 420.0,
     "panic_dmg": 1e9,          # armor lost per second that makes us break contact
     "panic_s": 2.5,              # how long that duck-out lasts
     "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
