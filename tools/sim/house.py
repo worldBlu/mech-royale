@@ -69,16 +69,16 @@ PRESETS = {
     "calibrated": {"level": {}, "sense": {"shared_memory": 3.0}},
     "harsh": {
         "level": {
-            "aim_sigma_scale": 0.72,
-            "fire_tol_scale": 0.80,
-            "react_scale": 0.45,
+            "aim_sigma_scale": 0.64,
+            "fire_tol_scale": 0.75,
+            "react_scale": 0.40,
             "engage_add": 20.0,
             "pref_scale": 1.00,
             "close_when_blind": 1,
             "blind_mortar": 1,
-            "converge_boost_energy": 8.0,
+            "converge_boost_energy": 6.0,
         },
-        "sense": {"shared_memory": 18.0, "ping_interval": 1.8, "ping_noise": 10.0},
+        "sense": {"shared_memory": 20.0, "ping_interval": 1.5, "ping_noise": 8.0},
     },
 }
 
@@ -111,6 +111,8 @@ class HouseAI:
         self.seen_since = -1e9
         self.was_visible = False
         self.loot_want = None
+        self.search_goal = None
+        self.search_until = 0.0
         self.burst_start = None
         self.burst_pause_until = -1.0
         self.burst_slot = None
@@ -243,11 +245,17 @@ class HouseAI:
                     boost = (bool(cfg.get("converge_boost", 1.0)) and dist > 45.0
                              and mech.energy > float(cfg.get("converge_boost_energy", 25.0)))
                 else:
-                    if t - self.strafe_t > cfg["strafe"]:
-                        self.strafe_t = t
-                        self.strafe_dir = -self.strafe_dir
-                    sd = self.strafe_dir
-                    self._set_move(mech, -dy * sd, dx * sd)
+                    # Sweep around the last-known spot: random points within 10 m, refreshed
+                    # every ~1.2 s, so the squad works its way around cover instead of orbiting
+                    # a single bearing forever.
+                    if self.search_goal is None or t > self.search_until:
+                        a = self.rng.random() * math.tau
+                        r = 2.0 + 8.0 * math.sqrt(self.rng.random())
+                        self.search_goal = (known[0] + math.cos(a) * r,
+                                            known[1] + math.sin(a) * r)
+                        self.search_until = t + 1.2
+                    self._toward(mech, self.search_goal[0], self.search_goal[1], 1.0,
+                                 cfg["converge"])
             elif dist > pref + 30.0:
                 self._toward(mech, known[0], known[1], 5.0, cfg["converge"])
                 # converge faster: houses boost towards a shared sighting when far away

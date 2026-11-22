@@ -125,6 +125,8 @@ class Match:
         self.house_sight_ids = set()
         self.house_ping_count = 0
         self.house_known_samples = 0
+        self.house_min_dist = 1e9
+        self.house_close_samples = 0
         self.player_seen = {}
         self.player_npc_seen = {}
 
@@ -1136,10 +1138,20 @@ class Match:
         # Union of what the living house bots can see this think.  House aim is where their
         # vision cone points, so this is genuinely LOS/arc gated rather than omniscient.
         sight = 0
+        min_house_d = 1e9
         for ai in self.house_ais:
             if ai.mech.alive and self.visible_mech(ai.mech, self.player):
                 sight += 1
                 self.house_sight_ids.add(ai.mech.id)
+            if ai.mech.alive:
+                min_house_d = min(min_house_d, math.hypot(
+                    ai.mech.pos[0] - self.player.pos[0],
+                    ai.mech.pos[1] - self.player.pos[1]))
+        if min_house_d < 1e9:
+            if min_house_d < self.house_min_dist:
+                self.house_min_dist = min_house_d
+            if min_house_d < 45.0:
+                self.house_close_samples += 1
         self.house_sight_samples += 1
         self.house_sight_house_total += sight
         if sight > self.house_sight_max:
@@ -1430,6 +1442,9 @@ class Match:
             "house_sight_max": int(self.house_sight_max),
             "house_sight_ever": len(self.house_sight_ids),
             "house_pings": int(self.house_ping_count),
+            "house_min_dist": round(self.house_min_dist, 1) if self.house_min_dist < 1e9 else None,
+            "house_close_frac": round(self.house_close_samples / self.house_sight_samples, 3)
+            if self.house_sight_samples else 0.0,
             "house_skill": dict(self.house_skill),
             "house_known_frac": round(
                 self.house_known_samples / self.house_sight_samples, 3
