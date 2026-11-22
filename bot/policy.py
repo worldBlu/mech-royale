@@ -42,7 +42,7 @@ KNOBS = {
     "rush_dist": 170.0,
     "weapon_r": 150.0,          # weapons worth a detour even while a fight is near
     "weapon_threat": 25.0,      # never turn our back on a hostile this close to grab one         # only chase gear this far
-    "finish_hp": 0.90,           # close in and finish targets below this hp fraction
+    "finish_hp": 0.35,           # close in and finish targets below this hp fraction
     "finish_d": 35.0,           # preferred range while finishing
     "camp": 0,                  # hold a low-exposure spot inside the next zone
     "camp_frac": 0.75,          # stay inside this fraction of the next radius
@@ -53,9 +53,6 @@ KNOBS = {
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
     "standoff": {"gun": 120.0, "laser": 160.0, "mortar": 150.0, "lightning": 28.0},
-    "fight_pos": 1,             # score fight positions instead of blind strafing
-    "observer_penalty": 40.0,   # cost of standing where another mech can see us
-    "peek": 1,                  # break line of sight while the primary weapon is not ready
 }
 
 
@@ -91,8 +88,6 @@ class Policy:
         self.take_until = -1.0
         self.strafe_dir = 1.0
         self.strafe_t = -99.0
-        self.fight_t = -99.0
-        self.fight_goal = None
         self.last_pos = None
         self.stuck_t = -99.0
         self.stuck_n = 0
@@ -244,9 +239,7 @@ class Policy:
             goal = cube_goal
         elif threat is not None and fresh and threat_d < k["engage_dist"] and fight_ok:
             mode = "FIGHT"
-            goal = self._fight_goal(
-                pos, threat, threat_d, t, me, fresh_hostiles, zone_center, zr
-            )
+            goal = self._fight_goal(pos, threat, threat_d, t)
         elif npc_tr is not None:
             mode = "FARM"
             goal = self._farm_goal(pos, npc_tr, npc_d)
@@ -662,24 +655,7 @@ class Policy:
         return out
 
     # ------------------------------------------------------------------ fight
-    def _weapon_ready(self, me):
-        """True when the weapon we would fire right now is loaded and off cooldown."""
-        for w in me.get("weapons") or []:
-            if not w:
-                continue
-            kind = w.get("kind") or "gun"
-            if float(w.get("reload") or 0.0) > 0.0:
-                continue
-            if float(w.get("cooldown") or 0.0) > 0.10:
-                continue
-            if kind == "gun" and float(w.get("ammo") or 0.0) <= 0.0:
-                continue
-            if kind == "laser" and float(w.get("charge") or 0.0) < 0.70:
-                continue
-            return True
-        return False
-
-    def _fight_goal(self, pos, tr, d, t, me=None, observers=None, zc=None, zr=None):
+    def _fight_goal(self, pos, tr, d, t):
         kind = self.combat.last_kind or "gun"
         pref = float(self.k["standoff"].get(kind, 120.0))
         fin = float(self.k.get("finish_hp") or 0.0)
@@ -692,57 +668,11 @@ class Policy:
         if d < pref - 45.0:
             ang = math.atan2(pos[1] - tr.y, pos[0] - tr.x)
             return (pos[0] + math.cos(ang) * 45.0, pos[1] + math.sin(ang) * 45.0)
-        if not self.k.get("fight_pos"):
-            if t - self.strafe_t > 1.4:
-                self.strafe_t = t
-                self.strafe_dir = -self.strafe_dir
-            ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + self.strafe_dir * math.pi * 0.5
-            return (pos[0] + math.cos(ang) * 22.0, pos[1] + math.sin(ang) * 22.0)
-        # Reuse a recent choice: sampling is LOS-heavy and the target barely moves at 20 Hz.
-        if self.fight_goal is not None and (t - self.fight_t) < 0.25:
-            return self.fight_goal
-        ready = self._weapon_ready(me) if me is not None else True
-        want_los = bool(ready) or d < 45.0
-        if self.k.get("peek") and not ready and d > 45.0:
-            want_los = False
-        pen = float(self.k.get("observer_penalty") or 0.0)
-        others = []
-        if observers and pen > 0.0:
-            for od, otr in observers:
-                if otr is tr or od > 170.0:
-                    continue
-                others.append((otr.x, otr.y))
-        base_ang = math.atan2(tr.y - pos[1], tr.x - pos[0])
-        best = None
-        best_score = -1e9
-        for rad in (9.0, 18.0):
-            for i in range(8):
-                ang = base_ang + i * (math.pi / 4.0)
-                gx = pos[0] + math.cos(ang) * rad
-                gy = pos[1] + math.sin(ang) * rad
-                if not self.w.inside(gx, gy) or not self.w.walkable(gx, gy):
-                    continue
-                if zc is not None and zr:
-                    if math.hypot(gx - zc[0], gy - zc[1]) > zr * 0.85:
-                        continue
-                los = self.w.has_los(gx, gy, tr.x, tr.y)
-                score = -1.1 * abs(math.hypot(gx - tr.x, gy - tr.y) - pref)
-                if want_los:
-                    score += 45.0 if los else -35.0
-                else:
-                    score += -45.0 if los else 0.0
-                for ex, ey in others:
-                    if self.w.has_los(ex, ey, gx, gy):
-                        score -= pen
-                if score > best_score:
-                    best_score = score
-                    best = (gx, gy)
-        if best is None:
-            ang = base_ang + self.strafe_dir * math.pi * 0.5
-            best = (pos[0] + math.cos(ang) * 18.0, pos[1] + math.sin(ang) * 18.0)
-        self.fight_t = t
-        self.fight_goal = best
-        return best
+        if t - self.strafe_t > 1.4:
+            self.strafe_t = t
+            self.strafe_dir = -self.strafe_dir
+        ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + self.strafe_dir * math.pi * 0.5
+        return (pos[0] + math.cos(ang) * 22.0, pos[1] + math.sin(ang) * 22.0)
 
     def _evade_goal(self, pos, tx, ty, zone_center, zr):
         """Flee while breaking line of sight: cover beats raw distance."""
