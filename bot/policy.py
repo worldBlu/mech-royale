@@ -293,7 +293,14 @@ class Policy:
         self.last_pos = (pos[0], pos[1])
         self.goal = goal
 
-        steer = self.nav.steer(pos, goal, t) if goal is not None else None
+        _threat_pos = (
+            (threat.x, threat.y, threat.z) if (threat is not None and fresh) else None
+        )
+        steer = (
+            self.nav.steer_cover(pos, goal, _threat_pos, t)
+            if goal is not None
+            else None
+        )
         move = [0.0, 0.0]
         dist_goal = 0.0
         if steer is not None:
