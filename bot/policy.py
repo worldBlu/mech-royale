@@ -15,31 +15,36 @@ KIND_VALUE = {"laser": 3.0, "mortar": 2.0, "lightning": 2.2, "gun": 0.2}
 # Tunables. The evaluation harness mutates this dict in place, so every knob below is read
 # through ``self.k`` at decision time and an override takes effect on the next tick.
 KNOBS = {
-    "engage_dist": 0.01,       # do not pick a fight with a target farther than this
-    "engage_hp_frac": 0.45,     # do not pick a fight with our own hp below this
+    "engage_dist": 260.0,       # do not pick a fight with a target farther than this
+    "engage_hp_frac": 0.30,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 1.00,      # running away when a fresh hostile is close
-    "evade_dist": 200.0,
+    "evade_hp_frac": 0.30,      # running away when a fresh hostile is close
+    "evade_dist": 120.0,
     "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
-    "farm_threat": 300.0,
-    "crate_threat": 300.0,
-    "loot_threat": 300.0,
+    "farm_threat": 140.0,
+    "crate_threat": 150.0,
+    "loot_threat": 60.0,
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 1.00,            # start healing below this fraction
-    "heal_exit": 1.00,          # stop at this fraction
+    "heal_hp": 0.95,            # start healing below this fraction
+    "heal_exit": 0.97,          # stop at this fraction
     "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
     "drop_early": 0,            # start walking to a supply drop before it lands
     "early_evade_s": 0.0,       # treat every fresh contact as a reason to run this early
     "dodge": 1,                 # side-step shells that are about to pass through us
-    "rush_s": 0.0,              # opening weapon rush (laser/lightning) until this time
+    "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
     "rush_dist": 170.0,         # only chase gear this far
+    "finish_hp": 0.60,           # close in and finish targets below this hp fraction
+    "finish_d": 35.0,           # preferred range while finishing
+    "camp": 0,                  # hold a low-exposure spot inside the next zone
+    "camp_frac": 0.75,          # stay inside this fraction of the next radius
+    "camp_leave": 12.0,         # seconds of slack before the next shrink to relocate
     "outnumber": 0,             # extra caution when more than one fresh hostile is visible
     "evade_sticky": 3.0,        # keep running this long after the trigger clears
     "trade_hp": 0.80,           # disengage when we are losing a duel...
@@ -140,6 +145,9 @@ class Policy:
         if not self.k.get("weapon_chase", 1):
             take_id, take_goal = None, None
 
+        # --- camp spot
+        camp_goal, camp_arrived = self._camp_step(obs, pos, t)
+
         # --- opening weapon rush
         rush_goal = self._rush_step(obs, pos, t, threat_d)
 
@@ -206,6 +214,9 @@ class Policy:
             if threat is not None and fresh:
                 self.evade_from = (threat.x, threat.y)
             goal = self._evade_goal(pos, self.evade_from[0], self.evade_from[1], zone_center, zr)
+        elif camp_goal is not None:
+            mode = "CAMP"
+            goal = None if camp_arrived else camp_goal
         elif rush_goal is not None:
             mode = "RUSH"
             goal = rush_goal
@@ -428,6 +439,62 @@ class Policy:
             return None, None
         return best["id"], (best["pos"][0], best["pos"][1])
 
+    def _camp_step(self, obs, pos, t):
+        """Pick (once) and hold a quiet spot inside the next circle. Returns (goal, arrived)."""
+        if not self.k.get("camp", 0):
+            self.camp_spot = None
+            return None, False
+        zone = obs.get("zone") or {}
+        nc = zone.get("next_center") or zone.get("center") or [0.0, 0.0]
+        nr = float(zone.get("next_radius") or zone.get("radius") or 0.0)
+        shrink_start = float(zone.get("shrink_start") or 0.0)
+        frac = float(self.k.get("camp_frac") or 0.75)
+        keep = max(nr * frac, 10.0)
+        spot = getattr(self, "camp_spot", None)
+        if spot is not None:
+            if not self.w.inside(spot[0], spot[1]) or not self.w.walkable(spot[0], spot[1]):
+                spot = None
+            elif math.hypot(spot[0] - nc[0], spot[1] - nc[1]) > keep:
+                spot = None
+            else:
+                travel = math.dist(pos[:2], spot) * 1.3 / 9.0
+                if (
+                    shrink_start
+                    and math.dist(pos[:2], spot) > 6.0
+                    and t + travel + float(self.k.get("camp_leave") or 12.0) >= shrink_start
+                ):
+                    spot = None
+        if spot is None:
+            best = None
+            best_s = -1e9
+            rng = self.rng
+            for _ in range(28):
+                ang = rng.uniform(0.0, 2.0 * math.pi)
+                rad = math.sqrt(rng.random()) * keep
+                gx = nc[0] + math.cos(ang) * rad
+                gy = nc[1] + math.sin(ang) * rad
+                if not self.w.inside(gx, gy) or not self.w.walkable(gx, gy):
+                    continue
+                d = math.dist(pos[:2], (gx, gy))
+                if d > 110.0:
+                    continue
+                ci, cj = self.w.cell_of(gx, gy)
+                cover = 0
+                for di in (-2, 0, 2):
+                    for dj in (-2, 0, 2):
+                        if not self.w.sight_blocked_cell(ci + di, cj + dj):
+                            cover += 1
+                sc = cover * 1.6 - d * 0.08 - rad * 0.02
+                if sc > best_s:
+                    best_s = sc
+                    best = (gx, gy)
+            spot = best
+            self.camp_spot = spot
+        if spot is None:
+            return None, False
+        d = math.dist(pos[:2], spot)
+        return spot, d <= 4.0
+
     def _rush_step(self, obs, pos, t, threat_d):
         """Opening seconds: grab a laser or lightning before the hunters find us."""
         self.rush_target = None
@@ -589,6 +656,11 @@ class Policy:
     def _fight_goal(self, pos, tr, d, t):
         kind = self.combat.last_kind or "gun"
         pref = float(self.k["standoff"].get(kind, 120.0))
+        fin = float(self.k.get("finish_hp") or 0.0)
+        if fin > 0.0:
+            hp = float(getattr(tr, "hp", 0.0) or 0.0)
+            if hp > 0.0 and hp / 1400.0 < fin:
+                pref = min(pref, float(self.k.get("finish_d") or 35.0))
         if d > pref + 45.0:
             return (tr.x, tr.y)
         if d < pref - 45.0:

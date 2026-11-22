@@ -494,7 +494,7 @@ class World:
         """
         dx = x1 - x0
         dy = y1 - y0
-        if dx * dx + dy * dy < 0.25:
+        if dx * dx + dy * dy < 1e-9:
             return True
         nx = self.nx
         ny = self.ny
@@ -542,11 +542,27 @@ class World:
             ty = 2.0
             tdy = 0.0
         for _ in range(abs(i1 - i) + abs(j1 - j)):       # bounded by the cell distance
-            if tx < ty:
+            if tx < ty - 1e-7:
                 i += step_i
                 tx += tdx
-            else:
+            elif ty < tx - 1e-7:
                 j += step_j
+                ty += tdy
+            else:
+                # The segment passes exactly through a cell corner: it touches the two cells
+                # beside the corner for a point, so treat that as crossing them. Otherwise a
+                # corner-clipping line would be accepted here and rejected a few metres later
+                # by an almost identical sub-segment (floating point decides which cells the
+                # tiny diagonal entry lands in).
+                ni = i + step_i
+                nj = j + step_j
+                if ni < 0 or ni >= nx or walk[j * nx + ni]:
+                    return False
+                if nj < 0 or nj >= ny or walk[nj * nx + i]:
+                    return False
+                i = ni
+                j = nj
+                tx += tdx
                 ty += tdy
             if i < 0 or j < 0 or i >= nx or j >= ny:
                 return False
