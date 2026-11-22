@@ -19,8 +19,8 @@ KNOBS = {
     "engage_hp_frac": 0.30,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 0.30,      # running away when a fresh hostile is close
-    "evade_dist": 120.0,
+    "evade_hp_frac": 0.45,      # running away when a fresh hostile is close
+    "evade_dist": 180.0,
     "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
@@ -33,8 +33,8 @@ KNOBS = {
     "heal_hp": 0.95,            # start healing below this fraction
     "heal_exit": 0.97,          # stop at this fraction
     "jink": 1,                   # weave while moving so their gun has to lead a wobbly target
-    "jink_frac": 0.70,
-    "jink_hz": 1.4,
+    "jink_frac": 0.55,
+    "jink_hz": 1.1,
     "jink_dist": 260.0,
     "panic_dmg": 1e9,          # armor lost per second that makes us break contact
     "panic_s": 2.5,              # how long that duck-out lasts
@@ -59,7 +59,7 @@ KNOBS = {
     "trade_hp": 0.80,           # disengage when we are losing a duel...
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
-    "standoff": {"gun": 120.0, "laser": 160.0, "mortar": 150.0, "lightning": 28.0},
+    "standoff": {"gun": 190.0, "laser": 220.0, "mortar": 150.0, "lightning": 28.0},
 }
 
 
