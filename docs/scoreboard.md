@@ -53,3 +53,14 @@ once we "pick" an entry it stops auto-replacing. After each new best, pick it ag
 | 17 | `bce2a36ae8f2edde09b11e9fd3fc49aa93e584bf` | 2026-11-22 01:40 PST | builders-4 | **2.89** (BB-1596495A) | the aggressive profile ported onto the current policy code (loot reach, camp fallback, fight-position machinery off) |
 | 18 | `82cfe5b2b204b8c5d36fd6d6279ef648a1313de0` | 2026-11-22 02:13 PST | builders-4 | pending | the 3.36 build plus fight-position scoring: shoot from outside other bots' lines of sight, duck while reloading |
 | 19 | `6f84359d77a6855048638842ba78c2eb2081a490` | 2026-11-22 02:35 PST | builders-4 | pending | modern code + fight positions + chase a wounded target that slipped out of sight |
+## builders-4 additions (2026-11-22 01:00-03:10 PST)
+
+| commit | what | score |
+| --- | --- | --- |
+| `bce2a36` | aggression knobs ported to the modern policy code | 2.89 (BB-1596495A) |
+| `c233911` | a548d11 + finish below 90% | 3.35 (BB-6CDB28E4) |
+| `4aeed5f` | braver evade (18%/100 m) + lighter heal | 3.27 (BB-7FF714D0) |
+| `5fbb728` | c233911 + weapons worth a detour in combat | 3.36 (BB-49CB69F2) |
+| `82cfe5b` | fight from cover / avoid crossfire | 3.36 (BB-0A44A3AC) |
+| `175b559` | weave while moving (jink 0.55 @ 1.1 Hz) | **3.39 (BB-2625314) — best, final entry** |
+| `30a8a36` | jink + finish below 90% | pending (BB-47573691) |
