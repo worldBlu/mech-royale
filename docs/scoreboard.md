@@ -50,10 +50,20 @@ The organisers rescored each team's picked builders-3 entry onto builders-4 auto
 | 23 | `9d1fa5b` | 11-22 04:05 | 3.50 (BB-C2053B1D) | 205-250 m - no further gain (first attempt was rejected: commit not pushed) |
 | 24 | `e3b62f0` | 11-22 04:20 | **3.52 (BB-ABC26667) - best, final entry** | farm drones/crates even with enemies within 260 m |
 | 25 | `8d1e54c` | 11-22 04:40 | 3.39 (BB-33D2E007) | target by time-to-kill instead of weakest - worse |
-| 26 | `4da3925` | 11-22 04:55 | pending (BB-B57A9188) | boost whenever moving (19.5 vs 11.7 m/s) |
+| 26 | `4da3925` | 11-22 04:55 | 3.34 (BB-B57A9188) | boost whenever moving (19.5 vs 11.7 m/s) - worse |
+| 27 | `2f979e8` | 11-22 05:00 | 3.18 (BB-9DC6A5AB) | stay in the fight: evade under 15%, heal under 60% - much worse |
+| 28 | `9dcfebc` | 11-22 05:05 | 3.24 (BB-0A098A13) | weave at every range (jink distance 420 m) - worse |
+| 29 | `581feef` | 11-22 05:10 | 3.30 (BB-23C3E683) | skip the first 45 s of fighting - worse |
+| 30 | `4e11b23` | 11-22 05:20 | 3.51 (BB-7B508BBE) | farm drones/crates at any threat distance (400 m) - same as 260 m |
+| 31 | `4e15e32` | 11-22 05:30 | **3.59 (BB-476D95C9) - best, final entry** | fight at 210-240 m |
+| 32 | `6da1d04` | 11-22 05:44 | 3.45 (BB-DD1974F3) | 220-260 m - past the optimum, too many shots miss |
+| 33 | `ef1f573` | 11-22 05:58 | pending (BB-DDFB6989) | heal only when the nearest seen enemy is 320 m away |
 
 Rejected: BB-7C82F652 - `9d1fa5b` submitted before it was pushed ("commit is not in that repository").
 Rejections still consume one of the hour's submissions.
+
+The fight-distance optimum is sharp: 120 m -> 3.36, 190 m -> 3.50, **210 m -> 3.59**, 220 m -> 3.45.
+At 240 m+ the laser is the only weapon that reaches and its 1.65 s cooldown cannot carry a duel.
 
 ## Lessons
 

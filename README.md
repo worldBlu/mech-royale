@@ -38,12 +38,28 @@ Perception keeps a 5 s track memory of visible mechs plus a bearing-only sound m
 baked 2 m walkability/height grid (the map is fixed, so it is baked offline into `bot/data/nav.bin`) with
 a 4 m coarse A* and 2 m local avoidance, budgeted at a few hundred expansions per tick; combat gates fire
 on real aim error, leads the target, and picks the weapon by the laser > mortar > lightning > laser
-triangle; policy is a small state machine (loot / rotate / camp / fight / evade / drop) that trades
-cubes, regen and the shrinking zone against the fact that **only place matters**.
+triangle; policy is a small state machine (zone / evade / drop / heal / loot / fight / farm / rotate) that
+trades cubes, regen and the shrinking zone against the fact that **only place matters**.
+
+Three behaviours turned out to matter more than the rest, all measured on the real practice board:
+
+1. **Never hide.** The 15 house bots share vision and never damage each other, so the first mech that takes
+   damage is the squad's weakest and therefore its primary target for the rest of the match. Every
+   defensive posture we tried (turtle, camp, heal-when-unseen) scored 0.7-2.6 against 3.6 for aggression.
+2. **Fight at 210-240 m.** Their aim error is angular, so distance is armour; our lead solver still lands
+   shots. 120 m scored 3.36, 190 m 3.50, 210 m 3.6, 240 m 3.45 - a sharp optimum.
+3. **Weave while moving.** A lateral sinusoid (`jink`) that only switches on near a fresh enemy cuts
+   incoming fire without costing much path length; heavier weave is worse because the path grows.
 
 ## Status
 
 - [x] GitHub integration + repository bootstrap
-- [ ] bot v1 (navigation + combat + policy)
-- [ ] local simulation harness for A/B tuning
-- [ ] first real submission and score calibration
+- [x] bot v1: navigation, combat, policy, `kit/check/check.py` PASS (ready 60 ms, p99 < 4 ms)
+- [x] offline simulator, evaluation harness, parallel knob screen, recorded-stream replay
+- [x] 30+ real submissions; best practice score **3.59** (96 fresh seeds, builders-4)
+- [x] docs: design notes, scoreboard, submission checklist
+- [ ] 5.9 (top-32 cut) - needs roughly double our damage throughput, not a knob
+
+See `docs/scoreboard.md` for every submission, what changed, and what it scored; `docs/sim.md` and
+`docs/nav.md`/`docs/combat.md` for the tools and measurements.
+
