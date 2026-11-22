@@ -58,9 +58,9 @@ KNOBS = {
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
     "standoff": {"gun": 120.0, "laser": 160.0, "mortar": 150.0, "lightning": 28.0},
-    "fight_pos": 0,             # score fight positions instead of blind strafing
-    "observer_penalty": 25.0,   # cost of standing where another mech can see us
-    "peek": 0,                  # break line of sight while the primary weapon is not ready
+    "fight_pos": 1,             # score fight positions instead of blind strafing
+    "observer_penalty": 40.0,   # cost of standing where another mech can see us
+    "peek": 1,                  # break line of sight while the primary weapon is not ready
     "retaliate": 0,             # shoot whoever shot us last, not just the weakest mech
 }
 
