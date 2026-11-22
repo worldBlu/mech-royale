@@ -468,6 +468,35 @@ class HitSim:
             return False
         return tp[2] - 0.1 <= p[2] <= tp[2] + h + 0.1
 
+    def impact_metrics(self, shot, impact, when):
+        """Signed impact error relative to the intended target's centre at `when`.
+
+        `along_m` > 0 means the impact is *beyond* the target along the shot azimuth
+        (long), < 0 means short; `lateral_m` is signed left/right; `dz_m` is above the
+        centre.  Only meaningful when the intended target is tracked at `when`.
+        """
+        if impact is None or shot.get("target") is None:
+            return {}
+        tr = self.tl.get(int(shot["target"]))
+        if tr is None:
+            return {}
+        got = tr.at(when)
+        if not got:
+            return {}
+        tp = got[0]
+        h = self.dims(tr.kind)[1]
+        cx, cy, cz = tp[0], tp[1], tp[2] + h * 0.5
+        ux = math.cos(shot["aim"][0])
+        uy = math.sin(shot["aim"][0])
+        ex, ey, ez = impact[0] - cx, impact[1] - cy, impact[2] - cz
+        return {
+            "along_m": ex * ux + ey * uy,
+            "lateral_m": -ex * uy + ey * ux,
+            "dz_m": ez,
+            "center_dist_m": math.sqrt(ex * ex + ey * ey + ez * ez),
+            "tof_s": when - shot["t"],
+        }
+
     def nearest_targets(self, time, exclude=None):
         out = []
         for aid, tr in self.tl.tracks.items():
@@ -493,6 +522,7 @@ class HitSim:
         intended_tr = self.tl.get(int(intended)) if intended is not None else None
         best_miss = None
         best_t = None
+        best_p = None
         impact = None
         t = 0.0
         first_time = shot["t"]
@@ -527,25 +557,33 @@ class HitSim:
                     if best_miss is None or miss < best_miss:
                         best_miss = miss
                         best_t = t
+                        best_p = p
             t += dt
         if impact is None:
             outcome = "miss"
             if intended_tr is not None and best_t is not None:
                 if intended_tr.at(first_time + best_t) is None:
                     outcome = "untracked"
-            return {"outcome": outcome, "aid": None, "t_hit": None,
-                    "miss_m": best_miss, "impact": None}
+            res = {"outcome": outcome, "aid": None, "t_hit": None,
+                   "miss_m": best_miss, "impact": None}
+            if best_p is not None:
+                res.update(self.impact_metrics(shot, best_p, first_time + best_t))
+                res["metrics_at"] = "closest"
+            return res
         if kind == "gun":
             outcome = "miss_ground"
             if intended_tr is not None:
                 got = intended_tr.at(first_time + t)
                 if got is None:
                     outcome = "untracked"
-            return {"outcome": outcome, "aid": None, "t_hit": None,
-                    "miss_m": best_miss, "impact": impact}
+            res = {"outcome": outcome, "aid": None, "t_hit": None,
+                   "miss_m": best_miss, "impact": impact}
+            res.update(self.impact_metrics(shot, impact, first_time + t))
+            return res
         # mortar: splash
         splash_r = float(st.get("splash_radius", 7.0))
         nearest = None
+        nearest_tp = None
         for aid, tkind, tp in self.nearest_targets(first_time + t):
             r, h = self.dims(tkind)
             c = (tp[0], tp[1], tp[2] + h * 0.5)
@@ -553,17 +591,23 @@ class HitSim:
                              (c[2] - impact[2]) ** 2)
             if dist <= splash_r and (nearest is None or dist < nearest[1]):
                 nearest = (aid, dist)
+                nearest_tp = (tp, tkind)
+        direct = bool(nearest_tp and self.cylinder_hit(impact, nearest_tp[0], nearest_tp[1]))
         outcome = "hit" if nearest else "miss"
         if (not nearest and intended_tr is not None
                 and intended_tr.at(first_time + t) is None):
             outcome = "untracked"
-        return {
+        res = {
             "outcome": outcome,
             "aid": nearest[0] if nearest else None,
             "t_hit": t,
             "miss_m": nearest[1] if nearest else (best_miss if outcome == "miss" else None),
             "impact": impact,
+            "splash_m": nearest[1] if nearest else None,
+            "direct": direct,
         }
+        res.update(self.impact_metrics(shot, impact, first_time + t))
+        return res
 
     def laser(self, shot):
         origin = shot["origin"]
@@ -631,6 +675,8 @@ class Replay:
         from main import Bot          # noqa: E402  (after sys.path setup)
         self.Bot = Bot
         self.bot = Bot(hello)
+        if args.no_mortar:
+            self.bot.combat.use_mortar = False
         self.ready_ms = (time.perf_counter() - t0) * 1000.0
         self.cfg = hello.get("config") or {}
         self.tl = Timeline(self.obs_list)
@@ -667,6 +713,8 @@ class Replay:
         self.shot_kinds = Counter()
         self.shot_misses = Counter()
         self.shot_untracked = Counter()
+        self.shot_dmg = Counter()
+        self.hit_dmg = Counter()
         self.aim_err_deg = {}
         self.aim_miss_m = {}
         self.hit_miss_m = {}
@@ -805,6 +853,29 @@ class Replay:
                         sh["crate"] = sh["kind"] == "gun"
                     self._record_shot(sh)
 
+    def _shot_damage(self, shot, res):
+        """Protocol damage estimate for one landed shot (no armour/spread modelling)."""
+        if res.get("outcome") != "hit":
+            return 0.0
+        kind = shot["kind"]
+        if kind == "gun":
+            return 45.0
+        if kind == "lightning":
+            return 60.0
+        if kind == "laser":
+            c = float(shot.get("charge") or 0.0)
+            cmax = float((shot.get("stats") or {}).get("charge", 0.75))
+            frac = min(1.0, c / max(1e-6, cmax))
+            return 315.0 * (0.35 + 0.65 * frac)
+        if kind == "mortar":
+            dmg = 200.0 if res.get("direct") else 0.0
+            sm = res.get("splash_m")
+            r = float((shot.get("stats") or {}).get("splash_radius", 7.0))
+            if sm is not None:
+                dmg += 160.0 * max(0.0, 1.0 - 0.7 * min(1.0, sm / max(1e-6, r)))
+            return dmg
+        return 0.0
+
     # -- shot metrics ----------------------------------------------------------------
     def _record_shot(self, shot):
         res = self.hitsim.evaluate(shot)
@@ -812,8 +883,12 @@ class Replay:
         self.shots.append(shot)
         kind = shot["kind"]
         self.shot_kinds[kind] += 1
+        dmg = self._shot_damage(shot, res)
+        shot["damage"] = dmg
+        self.shot_dmg[kind] += dmg
         if res["outcome"] == "hit":
             self.shot_hits[kind] += 1
+            self.hit_dmg[kind] += dmg
         elif res["outcome"] == "untracked":
             self.shot_untracked[kind] += 1
         else:
@@ -953,9 +1028,19 @@ class Replay:
                     "miss_m": s["result"].get("miss_m"),
                     "aim_err_deg": s.get("aim_err_deg"),
                     "charge": s.get("charge"), "crate": s.get("crate", False),
+                    "damage": round(s.get("damage") or 0.0, 1),
+                    "along_m": s["result"].get("along_m"),
+                    "lateral_m": s["result"].get("lateral_m"),
+                    "dz_m": s["result"].get("dz_m"),
+                    "splash_m": s["result"].get("splash_m"),
+                    "direct": s["result"].get("direct"),
+                    "tof_s": s["result"].get("tof_s"),
                 }
                 for s in self.shots
             ],
+            "damage": {k: round(v, 1) for k, v in self.shot_dmg.items()},
+            "damage_per_hit": {k: round(self.shot_dmg[k] / max(1, self.shot_hits[k]), 1)
+                              for k in self.shot_dmg},
             "aim_err_deg": {k: d.summary() for k, d in self.aim_err_deg.items()},
             "aim_miss_m": {k: d.summary() for k, d in self.aim_miss_m.items()},
             "hit_miss_m": {k: d.summary() for k, d in self.hit_miss_m.items()},
@@ -964,6 +1049,13 @@ class Replay:
             "end": self.end,
         }
         return out
+
+    @staticmethod
+    def _signed(d):
+        sm = d.summary()
+        if not sm.get("n"):
+            return "n=0"
+        return "n=%d p50=%+.2f p90=%+.2f" % (sm["n"], sm["p50"], sm["p90"])
 
     def print_summary(self):
         s = self.summary()
@@ -1004,9 +1096,38 @@ class Replay:
                 misses = self.shot_misses.get(kind, 0)
                 unt = self.shot_untracked.get(kind, 0)
                 print("  %-9s shots %4d  hits %4d (%5.1f%%)  tracked misses %3d"
-                      "  untracked %3d  miss dist %s"
+                      "  untracked %3d  miss dist %s  dmg %5.0f (%4.0f/shot %4.0f/hit)"
                       % (kind, n, h, 100.0 * h / max(1, n - unt), misses, unt,
-                         self.hit_miss_m.get(kind, Dist()).fmt(" m")))
+                         self.hit_miss_m.get(kind, Dist()).fmt(" m"),
+                         self.shot_dmg.get(kind, 0.0),
+                         self.shot_dmg.get(kind, 0.0) / max(1, n),
+                         self.shot_dmg.get(kind, 0.0) / max(1, h)))
+            if self.shot_kinds.get("mortar"):
+                along = Dist()
+                lat = Dist()
+                tof = Dist()
+                for sh in self.shots:
+                    if sh["kind"] != "mortar":
+                        continue
+                    r = sh["result"]
+                    if r.get("along_m") is not None:
+                        along.add(r["along_m"])
+                    if r.get("lateral_m") is not None:
+                        lat.add(r["lateral_m"])
+                    if r.get("tof_s") is not None:
+                        tof.add(r["tof_s"])
+                    print("    mortar t=%.2f %-10s along=%s lateral=%s dz=%s splash=%s"
+                          " direct=%s tof=%ss"
+                          % (sh["t"], r.get("outcome"),
+                             "%.1f" % r["along_m"] if r.get("along_m") is not None else "-",
+                             "%.1f" % r["lateral_m"] if r.get("lateral_m") is not None else "-",
+                             "%.1f" % r["dz_m"] if r.get("dz_m") is not None else "-",
+                             "%.1f" % r["splash_m"] if r.get("splash_m") is not None else "-",
+                             r.get("direct"),
+                             "%.2f" % r["tof_s"] if r.get("tof_s") is not None else "-"))
+                print("  mortar signed error (positive along = long): along %s  lateral %s"
+                      "  tof %s"
+                      % (self._signed(along), self._signed(lat), tof.fmt(" s")))
             if self.shots:
                 crates = sum(1 for sh in self.shots if sh.get("crate"))
                 if crates:
@@ -1076,6 +1197,8 @@ def main(argv=None):
     ap.add_argument("--map-dir", default=None)
     ap.add_argument("--arm", default=None,
                     help="what-if second weapon: laser, mortar or lightning")
+    ap.add_argument("--no-mortar", action="store_true",
+                    help="A/B: set combat.use_mortar=False (the mortar is still equipped)")
     ap.add_argument("--no-sim", action="store_true",
                     help="feed observations unchanged (raw recorded aim, no weapon/hit sim)")
     ap.add_argument("--trace", action="store_true", help="one line per match second")

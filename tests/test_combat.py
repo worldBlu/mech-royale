@@ -1,4 +1,4 @@
-﻿"""Synthetic combat tests: aim solutions, projectile fly-out, fire gating.
+"""Synthetic combat tests: aim solutions, projectile fly-out, fire gating.
 
 Run directly:
 
@@ -396,6 +396,21 @@ class PickTests(unittest.TestCase):
         tr = Track(pos=(120.0, 0.0, 0.0))
         me = make_me([gun_w(), mortar_w()], aim=(0.0, 0.0))
         self.assertEqual(self.combat.pick(me, 120.0, False, tr), 1)
+
+    def test_use_mortar_knob_defaults_on(self):
+        self.assertTrue(self.combat.use_mortar)
+
+    def test_use_mortar_off_falls_through(self):
+        cfg = dict(CFG)
+        cfg["combat"] = {"use_mortar": 0}
+        combat = Combat(StubWorld(True), cfg)
+        self.assertFalse(combat.use_mortar)
+        tr = Track(pos=(120.0, 0.0, 0.0))
+        me = make_me([gun_w(), mortar_w()], aim=(0.0, 0.0))
+        # no LOS: gun cannot fire and the mortar is disabled by the knob
+        self.assertIsNone(combat.pick(me, 120.0, False, tr))
+        # with LOS the gun still works (the mortar is the only thing switched off)
+        self.assertEqual(combat.pick(me, 120.0, True, tr), 0)
 
     def test_gun_preferred_when_los(self):
         tr = Track(pos=(120.0, 0.0, 0.0))

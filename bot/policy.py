@@ -19,8 +19,8 @@ KNOBS = {
     "engage_hp_frac": 0.45,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 0.45,      # running away when a fresh hostile is close
-    "evade_dist": 160.0,
+    "evade_hp_frac": 0.55,      # running away when a fresh hostile is close
+    "evade_dist": 180.0,
     "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
@@ -30,11 +30,12 @@ KNOBS = {
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 0.90,            # start healing below this fraction
+    "heal_hp": 0.95,            # start healing below this fraction
     "heal_exit": 0.97,          # stop at this fraction
-    "heal_safe_dist": 200.0,    # only heal when the nearest fresh hostile is farther
+    "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
+    "drop_early": 0,            # start walking to a supply drop before it lands
     "evade_sticky": 3.0,        # keep running this long after the trigger clears
     "trade_hp": 0.80,           # disengage when we are losing a duel...
     "trade_dur": 2.5,           # ...for at least this many seconds
@@ -425,7 +426,11 @@ class Policy:
             if lands_in > d / 18.0 + 1.0:
                 continue
             if lands_in > 3.0 and d > 60.0:
-                continue
+                # By default we only chase a drop once it is about to land. With drop_early
+                # we start moving right away, but only when the travel time fits the fall
+                # window with a couple of seconds to spare.
+                if not self.k.get("drop_early") or (d / 18.0) > lands_in - 2.0:
+                    continue
             if hp_frac > 0.92 and int(cubes) >= 9 and lands_in > 0.5:
                 continue
             holder = drop.get("holder")
@@ -637,4 +642,6 @@ class Policy:
                 best_s = s
                 best_i = i
         return best_i
+
+
 

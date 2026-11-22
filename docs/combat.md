@@ -16,10 +16,11 @@ measure it (`tools/replay.py`) and the synthetic test suite (`tests/test_combat.
 - A target the server currently lists in `obs.mechs` is visible now; its line is treated as
   clear for shooting even when the world grid says "tree", because trees block vision but
   not bullets/lasers.
-- Measured on `kit/check/stream.jsonl.gz` with the same policy: gun hit rate went from
-  3/6 (50%) to 18/31 (58.1%), and the number of fire decisions went from 9 to 31.
-  Laser: 7/7 aimed shots hit. Mortar: 3 shots, 0 hits, 2 of them against a target that had
-  already left the recording.
+- Measured on `kit/check/stream.jsonl.gz` with the current policy: gun 16/27 shots (59.3%,
+  720 damage, 45/hit); laser arm 8 shots / 7 hits (87.5%, 2205 damage, 315/hit); mortar arm
+  3 shots / 0 hits (2 "untracked", 1 tracked miss at 9.97 m surface distance; 0 damage);
+  lightning never had a target inside 45 m. The mortar is behind a `use_mortar` knob so the
+  Lead can A/B it in the real match without a code change.
 
 ## Public API (kept stable for `bot/policy.py`)
 
@@ -34,6 +35,7 @@ measure it (`tools/replay.py`) and the synthetic test suite (`tests/test_combat.
 | `can_hit(kind, d, los)` | coarse range/line check used by `pick` |
 | `last_kind` | weapon chosen by the last `decide` (used for positioning) |
 | `charging` | true while the laser is charging (policy suppresses boost) |
+| `use_mortar` | A/B knob, default `True`; config `combat.use_mortar=0` disables the mortar |
 
 `fire` is always exactly two booleans (schema `minItems`/`maxItems` 2). When only `aim`
 matters, the key can be omitted (missing fields default to "no trigger").
@@ -64,11 +66,37 @@ three times. Fire only when the predicted impact is inside the body: 2.1 m later
 
 No lead: the beam is instantaneous, so the desired direction is the target's current
 centre. The torso keeps charging while it slews. Release (send `fire[slot] = False`) only
-at `>= 96%` of max charge (`0.72 s` of `0.75`, 315 damage) *and* while aligned (LOS, range,
-pitch limits, 2.0 m lateral, 3.5 m vertical). Below that the trigger stays held. Releasing
-below `min_charge` cannot cancel a charge - the server still fires at 0.15 s - so the code
-never deliberately releases early. Damage scales from 35% at 0.15 s to 100% at 0.75 s; a
-0.62 s release (the old constant) was ~294 damage, and firing at 0.72 s gives the full 315.
+at `>= 96%` of max charge (`0.72 s` of `0.75`) *and* while aligned (LOS, range, pitch
+limits, 2.0 m lateral, 3.5 m vertical). Below that the trigger stays held. Releasing below
+`min_charge` cannot cancel a charge - the server still fires at 0.15 s - so the code never
+deliberately releases early.
+
+The protocol laser numbers, verified from `kit/protocol.md`:
+
+- charge time `0.75 s`; damage `315 * (0.35 + 0.65 * charge/0.75)`, i.e. 35% at zero charge
+  / `min_frac` and 100% at full;
+- `min_charge 0.15 s` (a release before it still fires as soon as 0.15 s is reached),
+  then `cooldown 1.65 s`; a full charge held `hold_s 2 s` longer auto-fires;
+- **cook-off is a +60% damage bonus against a mech that is holding a mortar** (it is a
+  property of the target, not a risk to the laser user);
+- charge is reported in the observation as seconds charged, quantised by the 20 Hz tick
+  (`0.05 s`). Decisions happen every `0.1 s`, so a release threshold of `0.72 s` is crossed
+  at the observed `0.75 s` - the replay confirms every aimed laser shot was fired at
+  `charge = 0.75`, damage `315`.
+
+Damage and cycle DPS:
+
+| release charge | damage | DPS (charge + 1.65 s cooldown) |
+| --- | --- | --- |
+| 0.62 s (old code's constant, if released there) | 279.5 | 123.1 |
+| 0.70 s (first 0.1 s observation at/above 0.62) | 301.4 | 128.3 |
+| 0.75 s (full) | 315.0 | 131.3 |
+
+The old constant was therefore throwing away 4-11% of the shot (not 17% - damage is a
+linear ramp in charge, and the old release was observed one or two 0.1 s samples after
+0.62, not at 0.62), and full charge is also the best sustained DPS. The code already used
+`LASER_RELEASE_FRAC = 0.96` before this task; the replay measurement now confirms the
+actual release is full charge and no change was needed.
 
 ### Mortar (72 m/s, gravity 22, 200 direct + 160 splash)
 
@@ -91,6 +119,30 @@ The fire gate converts pitch error into range error through `d(range)/d(pitch) =
 ~5 m should still damage. The minimum mortar range is 20 m and `pick` only chooses it when
 the target is out of LOS or farther than 55 m, to avoid self-splash.
 
+**Measured on the recording (replay instrumentation).** The three mortar shots in the
+stream are all long-flight: 95-145 m, 1.3-2.2 s time of flight. `tools/replay.py` now
+reports a signed impact error for every shell (`along_m` > 0 = long, `lateral_m`, `dz_m`,
+`splash_m`, `direct`, `tof_s`) plus splash/direct damage. For the only shot where the
+target is still tracked at impact (`t=22.95`, 95 m, 1.62 s flight):
+
+- the bot's solve put the shell within 0.2 m of the target centre at the target's
+  fire-time distance, so the ballistic pitch and lead were right at fire time;
+- 0.15 s after the shot the target started a jetpack climb at `+8.9 m/s` and rose 13 m
+  over the flight, while changing course every 0.1 s. The shell therefore impacted
+  12.7 m long, 8.4 m lateral and 19.2 m below the target's centre - no splash, no damage;
+- the other two shots are "untracked": the target left the recording before impact, so
+  there is no evidence they missed for aim reasons (one passed 3.6 m below the target's
+  fire-time centre at its horizontal range).
+
+Conclusion: no systematic solve bias was found (aim error p50 0.36 deg, shell passes the
+aimed point); the miss is future acceleration and terrain height that a 1.3-2.2 s ballistic
+lead cannot know. The mortar is therefore a low-confidence weapon against moving mechs, and
+the fix is target selection, not more aim math. `Combat.use_mortar` (constructor config
+`combat.use_mortar`, default 1; replay `--no-mortar`) lets the Lead A/B it off. It is not
+silently disabled: with it on the recording fires 3 shells for 0 damage; with it off the
+gun result is identical (27/16) - the mortar shots are opportunistic shots while the gun is
+on cooldown, so the knob is neutral in this stream and must be decided on real-match data.
+
 ### Lightning (30 degree cone, 45 m, 60 dmg)
 
 Instant and automatic: it hits the nearest target inside a 30 degree cone around the aim
@@ -110,7 +162,7 @@ preferred because it can lob over the cover.
 1. laser if ready and `can_hit`;
 2. lightning if ready, in range and the target is within 0.95 rad of the current aim yaw;
 3. gun if it has ammo, LOS and range (the reliable DPS);
-4. mortar if ready, in range and (no LOS or target farther than 55 m);
+4. mortar if `use_mortar`, ready, in range and (no LOS or target farther than 55 m);
 5. an empty gun last, so `decide` asks for the reload.
 
 ## Fire gating
@@ -154,6 +206,7 @@ python tools/replay.py                           # full summary
 python tools/replay.py --trace                   # + one line per match second
 python tools/replay.py --arm laser               # what-if: give us slot 1 = laser
 python tools/replay.py --arm mortar --json out.json
+python tools/replay.py --arm mortar --no-mortar  # A/B: combat.use_mortar = False
 python tools/replay.py --no-sim                  # feed obs unchanged (no shots)
 ```
 
@@ -164,8 +217,11 @@ raw feed: it measures the aim command against the recorded aim and does not simu
 Reported diagnostics: policy mode split (decisions and simulated ticks), mode switches,
 recorded horizontal path, decisions outside the zone, boost/jump/reload decisions, the
 chosen combat target and its distance, currently-visible enemy distance, simulated shots /
-hits / tracked misses / untracked shots per weapon, miss distance at impact, aim error at
-fire time (deg) and the implied lateral miss (m), and every protocol event with its source
+hits / tracked misses / untracked shots per weapon, miss distance at impact, damage per
+weapon (laser uses the protocol charge curve 315*(0.35+0.65*charge/0.75), mortar 200 direct
++ 160 splash falling to 30% at 7 m, gun 45, lightning 60), aim error at fire time (deg) and
+the implied lateral miss (m), a signed mortar impact table (`along/lateral/dz/splash/direct/
+tof`, positive along = long) and every protocol event with its source
 (`HIT ... on <target> with <weapon> [REAR]`, `DAMAGED ... by mech <id>|zone ...`).
 
 "Untracked" means the intended target is missing from the recording at the moment of
@@ -178,21 +234,23 @@ worse than they are.
 Recording: 300 observations, 36.8 s, 16 mechs, the self bot has only a gun. Exactly one
 hostile (mech id 10) is ever visible; the combat target is at p50 140.1 m (p90 150.3 m),
 and the recorded self path is 363.1 m with 0 decisions outside the zone. Policy split in
-the current tree: ROTATE 173 decisions (57.7%), EVADE 74 (24.7%), FIGHT 52 (17.3%),
-FARM 1; 9 switches; boost on 244 decisions (488 ticks); jump 28; reload 0.
+the current tree (after the Lead's policy changes): EVADE 169 decisions (56.3%), ROTATE 62
+(20.7%), FIGHT 52 (17.3%), HEAL 16 (5.3%), FARM 1; 11 switches; boost on 229 decisions
+(458 ticks); jump 28; reload 0.
 
 ### Before / after, same policy and same replay
 
 | run | fire decisions | shots | hits | hit % | tracked miss p50 / p90 | aim error p50 / p90 |
 | --- | --- | --- | --- | --- | --- | --- |
 | old `combat.py` (HEAD `21ca44f`) | 9 | 6 | 3 | 50.0% | 2.21 / 6.70 m | 0.08 / 0.22 deg |
-| new `combat.py` | 31 | 31 | 18 | 58.1% | 1.46 / 6.81 m | 0.24 / 0.45 deg |
+| new `combat.py` (policy at that time) | 31 | 31 | 18 | 58.1% | 1.46 / 6.81 m | 0.24 / 0.45 deg |
+| current tree (policy changed by the Lead) | 27 | 27 | 16 | 59.3% | 1.46 / 6.81 m | 0.28 / 0.38 deg |
 
 The new gate admits about `atan2(2.1, 140) = 0.86 deg` of lateral error instead of the old
 `atan2(1.5, 140) = 0.61 deg`, which is why its average aim error at fire time is larger -
-but it fires every cooldown instead of only on near-perfect aim, so it gets 31 shots
-instead of 6 and a slightly better hit rate. The old code also ignored cooldown when
-requesting fire (9 requests -> only 6 actual shots).
+but it fires every cooldown instead of only on near-perfect aim, so it gets more shots and
+a slightly better hit rate. The old code also ignored cooldown when requesting fire
+(9 requests -> only 6 actual shots).
 
 The older full-match baseline (old combat **and** old policy at HEAD) was 6 gun shots /
 3 hits, modes ROTATE 165 / FIGHT 73 / EVADE 61 / FARM 1; the policy has since been changed
@@ -200,37 +258,44 @@ by the Lead, so only the A/B table above isolates the combat changes.
 
 ### Weapon what-ifs on the same recording
 
-| arm | gun shots/hits | other weapon shots/hits | fire requests | other weapon aim error p50 / p90 |
-| --- | --- | --- | --- | --- |
-| default (gun only) | 31 / 18 (58.1%) | - | gun 31 | - |
-| `--arm laser` | 19 / 12 (63.2%) | laser 8 / 7 (87.5%) | laser 67, gun 19 | 0.22 / 0.27 deg |
-| `--arm mortar` | 31 / 18 | mortar 3 / 0 (1 tracked miss at 4.87 m, 2 untracked) | gun 31, mortar 3 | 0.32 / 0.36 deg |
-| `--arm lightning` | 31 / 18 | none (no hostile ever inside 45 m) | gun 31 | - |
+| arm | gun shots/hits | other weapon shots/hits | damage (weapon) | fire requests | other weapon aim error p50 / p90 |
+| --- | --- | --- | --- | --- | --- |
+| default (gun only) | 27 / 16 (59.3%) | - | 720 (gun) | gun 27 | - |
+| `--arm laser` | 19 / 12 (63.2%) | laser 8 / 7 (87.5%) | 540 (gun) + 2205 (laser) | laser 67, gun 19 | 0.22 / 0.27 deg |
+| `--arm mortar` | 27 / 16 | mortar 3 / 0 (1 tracked miss at 9.97 m, 2 untracked) | 720 (gun) + 0 (mortar) | gun 27, mortar 3 | 0.32 / 0.36 deg |
+| `--arm lightning` | 27 / 16 | none (no hostile ever inside 45 m) | 720 (gun) | gun 27 | - |
 
+Damage per hit: gun 45, laser 315 (every aimed laser shot was fired at `charge = 0.75`).
 The laser's 8th shot was a 0.6-charge release with no target when the hostile left vision
-and the policy stopped calling combat; the 7 aimed laser shots all hit (charge 0.75 each).
-Laser fire requests are high because holding the trigger while charging counts as a fire
-decision every 0.1 s; actual shots are limited by the 0.75 s charge and 1.65 s cooldown.
+and the policy stopped calling combat; the 7 aimed laser shots all hit. Laser fire requests
+are high because holding the trigger while charging counts as a fire decision every 0.1 s;
+actual shots are limited by the 0.75 s charge and 1.65 s cooldown.
 
 ## What still misses, and why
 
-- **Gun at 140 m (58.1%).** Flight time is 0.5-0.56 s. The recorded target changes velocity
+- **Gun at 140 m (59.3%).** Flight time is 0.5-0.56 s. The recorded target changes velocity
   every 0.1 s (id 10's `vx` moves between -12.4 and -5.9 m/s inside 0.5 s), so a linear lead
   cannot predict it: a standalone study over all visible mech samples measured the
   horizontal lead error at p50 1.90 m / mean 2.69 m. Simulated miss distances at impact are
   p50 1.46 m, p90 6.81 m, max 11.12 m - pure target jink, not aim math. On top of that the
   hit simulator does not model the gun's 0.6 degree Gaussian spread (~1.47 m at 140 m), so
-  the real server hit rate will be somewhat lower than 58%. Best fixes are tactical
+  the real server hit rate will be somewhat lower than 59%. Best fixes are tactical
   (engage closer, prefer targets with low lateral velocity), not more lead math.
-- **Mortar.** 3 shots, 0 hits. 2 were "untracked" - the target had already left the
-  recording by impact, 1 tracked shot impacted 4.87 m from the target (inside the 7 m
-  splash, so it would have damaged). Flight times of 1.5-4 s make it a weapon for
-  stationary or slow targets and NPCs, not for a jinking mech; the aim solve itself is
-  correct (aim error 0.32 deg, static tests hit the exact point).
+- **Mortar.** 3 shots, 0 hits, 0 damage in this recording. The only measurable shot
+  (`t=22.95`, 95 m, 1.62 s flight) landed 12.7 m long / 8.4 m lateral / 19.2 m below the
+  target because the target jetpacked upward at 8.9 m/s 0.15 s after the shot and kept
+  changing course; at fire time the solve passed within 0.2 m of the target centre. The
+  other 2 shots are untracked (the target left the recording before impact). Aim error is
+  p50 0.36 deg; this is future-acceleration error, not a formula error. Flight time
+  1.3-2.2 s at 95-145 m makes the mortar a low-confidence weapon against moving mechs (fine
+  for stationary/slow targets and NPCs). `use_mortar` (default on) and replay `--no-mortar`
+  exist for a real-match A/B; in this stream the knob is neutral (gun 27/16 either way).
 - **Laser.** 7/7 aimed shots hit and the charge/release logic behaves. The residual risk is
   the 2.4 s charge+cooldown cycle and the charge dump when the target leaves vision while
   the laser is partly charged (the policy stops calling combat, the trigger defaults to
-  false, and the server fires the partial charge).
+  false, and the server fires the partial charge - 0.6 s in one recorded case, 276 damage
+  wasted on no target). Running at full charge is also the best DPS, so the only remaining
+  lever is choosing when to start the 1.65 s cooldown.
 - **Lightning.** No target ever came within 45 m in this recording, so it is only covered
   by unit tests (30 degree cone at 0.45 rad off-axis fires, 0.60 does not).
 - **Replay limitations.** The hit simulation ignores enemy fire, own damage/death, loot and
@@ -252,12 +317,14 @@ decision every 0.1 s; actual shots are limited by the 0.75 s charge and 1.65 s c
   correct k=1.0 was kept.
 - **Mortar fixed 0.25 s lead** (the old code): replaced by the exact solve; the old mortar
   aim error was p90 10.8 deg, the new one is p90 0.36 deg.
-- **Laser release at 0.62 s** (the old `LASER_RELEASE`): below full charge; changed to
-  0.96 of max charge (0.72 s) after alignment checks were added.
+- **Laser release at 0.62 s** (the old `LASER_RELEASE`): the first 0.1 s observation at or
+  above 0.62 is 0.65-0.70, worth 280-301 damage (89-96% of 315) and lower sustained DPS than
+  full charge; changed to `0.72 s` threshold, which the 0.05 s charge quantum turns into an
+  actual release at 0.75 s / 315 damage.
 
 ## Tests
 
-`tests/test_combat.py` - standard library `unittest`, 24 tests, runs directly:
+`tests/test_combat.py` - standard library `unittest`, 26 tests, runs directly:
 
 ```
 python tests/test_combat.py
@@ -268,7 +335,8 @@ mortar (the solved direction is flown forward with the protocol speeds/gravity a
 pass within the 2.5 m body radius), mortar high/low ground, lightning cone and range,
 stale-track extrapolation, cubes raising the target centre, fire withheld for large yaw
 and pitch errors, pitch clamp, visible-now overriding grid LOS, laser hold/release/cooldown
-semantics, gun reload, weapon pick order and `can_hit` boundaries.
+semantics, gun reload, weapon pick order, `can_hit` boundaries and the `use_mortar` knob
+(default on; off falls through to the gun and never selects the mortar).
 
 ## Conformance
 

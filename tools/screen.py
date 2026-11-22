@@ -18,13 +18,13 @@ import time
 
 CONFIGS = [
     ("base", {}),
-    ("cover", {"cover": 1}),
-    ("heal250", {"heal_safe_dist": 250.0}),
-    ("heal97", {"heal_hp": 0.97}),
-    ("healExit", {"heal_hp": 0.70, "heal_exit": 0.99}),
-    ("engage60", {"engage_hp_frac": 0.60}),
-    ("evadeStep120", {"evade_step": 120.0}),
-    ("standoff180", {"standoff": {"gun": 180.0, "laser": 210.0, "mortar": 150.0, "lightning": 28.0}}),
+    ("dropEarly", {"drop_early": 1}),
+    ("heal250", {"heal_safe_dist": 250.0, "heal_hp": 0.95}),
+    ("evade55", {"evade_hp_frac": 0.55, "evade_dist": 180.0}),
+    ("combo", {"drop_early": 1, "heal_safe_dist": 250.0, "heal_hp": 0.95, "evade_hp_frac": 0.55, "evade_dist": 180.0}),
+    ("dropHeal", {"drop_early": 1, "heal_safe_dist": 250.0, "heal_hp": 0.95}),
+    ("dropCube", {"drop_early": 1, "cube_chase": 1, "target_weak": 1}),
+    ("aggro", {"engage_dist": 240.0, "farm_threat": 170.0}),
 ]
 
 
@@ -128,3 +128,6 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+

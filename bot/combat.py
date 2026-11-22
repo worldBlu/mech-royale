@@ -66,6 +66,9 @@ class Combat:
         mech = cfg.get("mech") or {}
         self.muzzle_cfg = float(mech.get("muzzle_height", 7.0))
         self.eye_cfg = float(mech.get("eye_height", 8.0))
+        combat_cfg = cfg.get("combat") or {}
+        # A/B knob: config combat.use_mortar=0 (or replay --no-mortar) disables the mortar.
+        self.use_mortar = bool(combat_cfg.get("use_mortar", 1))
         self.charging = False
         self.last_kind = None
 
@@ -143,7 +146,7 @@ class Combat:
             return gun[0]
 
         mortar = self._slot(me, "mortar")
-        if (mortar and self._ready(mortar[1], "mortar")
+        if (mortar and self.use_mortar and self._ready(mortar[1], "mortar")
                 and self.can_hit("mortar", d, los) and d >= 25.0):
             if not los or d > 55.0:
                 return mortar[0]
