@@ -23,18 +23,18 @@ KNOBS = {
     "evade_dist": 120.0,
     "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
-    "evade_step": 90.0,
+    "evade_step": 115.0,
     "farm_threat": 140.0,
     "crate_threat": 150.0,
     "loot_threat": 60.0,
-    "boost_energy": 22.0,
+    "boost_energy": 8.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
     "heal_hp": 0.95,            # start healing below this fraction
     "heal_exit": 0.97,          # stop at this fraction
     "jink": 1,                   # weave while moving so their gun has to lead a wobbly target
-    "jink_frac": 0.55,
-    "jink_hz": 1.1,
+    "jink_frac": 0.70,
+    "jink_hz": 1.4,
     "jink_dist": 260.0,
     "panic_dmg": 1e9,          # armor lost per second that makes us break contact
     "panic_s": 2.5,              # how long that duck-out lasts
