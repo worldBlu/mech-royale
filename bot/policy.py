@@ -38,7 +38,7 @@ KNOBS = {
     "jink_dist": 260.0,
     "panic_dmg": 1e9,          # armor lost per second that makes us break contact
     "panic_s": 2.5,              # how long that duck-out lasts
-    "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
+    "heal_safe_dist": 320.0,    # only heal when the nearest fresh hostile is farther
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
     "target_ttk": 0,            # choose the target we can finish soonest instead (experimental)
@@ -59,7 +59,7 @@ KNOBS = {
     "trade_hp": 0.80,           # disengage when we are losing a duel...
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
-    "standoff": {"gun": 210.0, "laser": 240.0, "mortar": 150.0, "lightning": 28.0},
+    "standoff": {"gun": 190.0, "laser": 220.0, "mortar": 150.0, "lightning": 28.0},
 }
 
 
