@@ -32,9 +32,16 @@ KNOBS = {
     "heal": 1,                  # break contact and let the 45/s regen top us up
     "heal_hp": 0.95,            # start healing below this fraction
     "heal_exit": 0.97,          # stop at this fraction
+    "jink": 1,                   # weave while moving so their gun has to lead a wobbly target
+    "jink_frac": 0.55,
+    "jink_hz": 1.1,
+    "jink_dist": 260.0,
+    "panic_dmg": 1e9,          # armor lost per second that makes us break contact
+    "panic_s": 2.5,              # how long that duck-out lasts
     "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
+    "target_ttk": 0,            # choose the target we can finish soonest instead (experimental)
     "drop_early": 0,            # start walking to a supply drop before it lands
     "early_evade_s": 0.0,       # treat every fresh contact as a reason to run this early
     "dodge": 1,                 # side-step shells that are about to pass through us
@@ -87,6 +94,8 @@ class Policy:
         self.take_id = None
         self.take_until = -1.0
         self.strafe_dir = 1.0
+        self.hp_hist = []
+        self.panic_until = 0.0
         self.strafe_t = -99.0
         self.last_pos = None
         self.stuck_t = -99.0
@@ -129,10 +138,25 @@ class Policy:
         if self.k.get("target_weak") and fresh_hostiles:
             cands = [h for h in fresh_hostiles if h[0] < self.k["engage_dist"]]
             if cands:
-                def _hp(h):
-                    hp = getattr(h[1], "hp", None)
-                    return hp if hp and hp > 0.0 else 1e9
-                threat_d, threat = min(cands, key=lambda h: _hp(h))
+                if self.k.get("target_ttk"):
+                    # Pick the target we can actually finish soonest: cheap to kill, close,
+                    # and in plain sight. Chasing the lowest-HP mech behind a wall burned the
+                    # clock while the rest of the squad closed in.
+                    dps = {"gun": 185.0, "laser": 170.0, "mortar": 70.0, "lightning": 235.0}
+                    kind = self.combat.last_kind or "gun"
+                    rate = dps.get(kind, 150.0)
+
+                    def _ttk(h):
+                        d, tr = h
+                        hp = float(getattr(tr, "hp", 0.0) or 1400.0)
+                        los = self.w.has_los(pos[0], pos[1], tr.x, tr.y)
+                        return hp / rate + 0.0025 * d + (0.0 if los else 0.6)
+                    threat_d, threat = min(cands, key=_ttk)
+                else:
+                    def _hp(h):
+                        hp = getattr(h[1], "hp", None)
+                        return hp if hp and hp > 0.0 else 1e9
+                    threat_d, threat = min(cands, key=lambda h: _hp(h))
         fresh = threat is not None
 
         zone = obs["zone"]
@@ -168,6 +192,16 @@ class Policy:
         mode = "ROTATE"
         goal = None
         k = self.k
+        # Getting shredded right now? Break contact for a moment: standing in a three-way
+        # crossfire is how an otherwise fine match ends at 90 s.
+        self.hp_hist.append((t, hp_frac))
+        while self.hp_hist and t - self.hp_hist[0][0] > 2.0:
+            self.hp_hist.pop(0)
+        if len(self.hp_hist) >= 3:
+            dt = t - self.hp_hist[0][0]
+            if dt >= 0.8 and (hp_frac - self.hp_hist[0][1]) * 1400.0 <= -float(k["panic_dmg"]) * dt:
+                self.panic_until = max(self.panic_until, t + float(k["panic_s"]))
+        panic = t < self.panic_until
         aimed = self._aimed_count(obs, pos, k["evade_aimed_dist"])
         tr_hp = float(getattr(threat, "hp", 0.0) or 0.0) if threat is not None else 0.0
         tr_frac = tr_hp / 1400.0 if tr_hp > 0.0 else 1.0
@@ -182,6 +216,8 @@ class Policy:
             or (t < k["early_evade_s"] and fresh and threat_d < k["evade_dist"])
             # two barrels on us at once is not a duel, it is a crossfire
             or (k["outnumber"] and len(fresh_hostiles) >= 2 and hp_frac < 0.80 and threat_d < 150.0)
+            # we just lost a big chunk of armor in one window: duck out of the line of fire
+            or (panic and hp_frac < 0.90)
         )
         if evade:
             self.evade_until = max(self.evade_until, t + float(k["evade_sticky"]))
@@ -321,6 +357,19 @@ class Policy:
                 n = math.hypot(move[0], move[1])
                 if n > 1.0:
                     move = [move[0] / n, move[1] / n]
+
+        if self.k.get("jink") and math.hypot(move[0], move[1]) > 0.3 and fresh_hostiles:
+            # Zig-zag: rounds fly at 252 m/s, so a target that changes heading twice a second
+            # is far harder to lead than one walking a straight line.
+            jx, jy = fresh_hostiles[0][1].x, fresh_hostiles[0][1].y
+            if math.dist(pos[:2], (jx, jy)) < float(self.k["jink_dist"]):
+                m = math.hypot(move[0], move[1])
+                ux, uy = move[0] / m, move[1] / m
+                a = float(self.k["jink_frac"]) * math.sin(2.0 * math.pi * float(self.k["jink_hz"]) * t)
+                move = [ux - uy * a, uy + ux * a]
+                m2 = math.hypot(move[0], move[1])
+                if m2 > 1.0:
+                    move = [move[0] / m2, move[1] / m2]
 
         act["move"] = move
         act["aim"] = [float(aim[0]), float(aim[1])]
