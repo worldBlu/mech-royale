@@ -18,11 +18,12 @@ import time
 
 CONFIGS = [
     ("base", {}),
-    ("s30p09", {"strafe_step": 30.0, "strafe_period": 0.9, "strafe_jitter": 0.4}),
-    ("s40p09", {"strafe_step": 40.0, "strafe_period": 0.9, "strafe_jitter": 0.4}),
-    ("s50p09", {"strafe_step": 50.0, "strafe_period": 0.9, "strafe_jitter": 0.4}),
-    ("s40p07", {"strafe_step": 40.0, "strafe_period": 0.7, "strafe_jitter": 0.5}),
-    ("s40p12", {"strafe_step": 40.0, "strafe_period": 1.2, "strafe_jitter": 0.4}),
+    ("frac40", {"camp_frac": 0.40}),
+    ("frac85", {"camp_frac": 0.85}),
+    ("healFull", {"heal_hp": 1.0, "heal_exit": 1.0, "heal_safe_dist": 300.0}),
+    ("evade70", {"evade_hp_frac": 0.70, "evade_dist": 200.0}),
+    ("leave20", {"camp_leave": 20.0}),
+    ("noRush", {"rush_s": 0.0}),
 ]
 
 

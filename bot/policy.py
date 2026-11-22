@@ -57,6 +57,10 @@ KNOBS = {
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
     "standoff": {"gun": 100.0, "laser": 150.0, "mortar": 150.0, "lightning": 28.0},
+    "fight_pos": 1,             # score fight positions instead of blind strafing
+    "observer_penalty": 25.0,   # cost of standing where another mech can see us
+    "peek": 1,                  # break line of sight while the primary weapon is not ready
+    "retaliate": 1,             # shoot whoever shot us last, not just the weakest mech
 }
 
 
@@ -104,6 +108,10 @@ class Policy:
         self.pickup_r = float(loot.get("pickup_radius", 4.0))
         self.cube_r = float(cubes.get("pickup_radius", 3.5))
         self.drops_cfg = cfg.get("drops") or {}
+        self.hit_by = {}
+        self.fight_t = -99.0
+        self.fight_goal = None
+        self.attackers = []
 
     # ------------------------------------------------------------------ main
     def act(self, obs):
@@ -152,6 +160,15 @@ class Policy:
                     hp = getattr(h[1], "hp", None)
                     return hp if hp and hp > 0.0 else 1e9
                 threat_d, threat = min(cands, key=lambda h: _hp(h))
+        # Retaliation outranks "weakest": the bot that just shot us is the one that knows
+        # where we are, and killing it stops the damage instead of chasing a distant cripple.
+        if self.k.get("retaliate") and (t - self.perc.last_damaged) < 4.0:
+            _aid = self.perc.last_attacker
+            if _aid is not None:
+                for _d, _tr in fresh_hostiles:
+                    if int(getattr(_tr, "id", -1)) == int(_aid):
+                        threat, threat_d = _tr, _d
+                        break
         fresh = threat is not None
 
         zone = obs["zone"]
@@ -247,7 +264,9 @@ class Policy:
             goal = self._evade_goal(pos, self.evade_from[0], self.evade_from[1], zone_center, zr)
         elif threat is not None and fresh and threat_d < k["engage_dist"] and fight_ok:
             mode = "FIGHT"
-            goal = self._fight_goal(pos, threat, threat_d, t)
+            goal = self._fight_goal(
+                pos, threat, threat_d, t, me, fresh_hostiles, zone_center, zr
+            )
         elif camp_goal is not None:
             mode = "CAMP"
             goal = None if camp_arrived else camp_goal
@@ -700,7 +719,24 @@ class Policy:
         return out
 
     # ------------------------------------------------------------------ fight
-    def _fight_goal(self, pos, tr, d, t):
+    def _weapon_ready(self, me):
+        """True when the weapon we would fire right now is loaded and off cooldown."""
+        for w in me.get("weapons") or []:
+            if not w:
+                continue
+            kind = w.get("kind") or "gun"
+            if float(w.get("reload") or 0.0) > 0.0:
+                continue
+            if float(w.get("cooldown") or 0.0) > 0.10:
+                continue
+            if kind == "gun" and float(w.get("ammo") or 0.0) <= 0.0:
+                continue
+            if kind == "laser" and float(w.get("charge") or 0.0) < 0.70:
+                continue
+            return True
+        return False
+
+    def _fight_goal(self, pos, tr, d, t, me=None, observers=None, zc=None, zr=None):
         kind = self.combat.last_kind or "gun"
         pref = float(self.k["standoff"].get(kind, 120.0))
         fin = float(self.k.get("finish_hp") or 0.0)
@@ -713,11 +749,57 @@ class Policy:
         if d < pref - 45.0:
             ang = math.atan2(pos[1] - tr.y, pos[0] - tr.x)
             return (pos[0] + math.cos(ang) * 45.0, pos[1] + math.sin(ang) * 45.0)
-        if t - self.strafe_t > 1.4:
-            self.strafe_t = t
-            self.strafe_dir = -self.strafe_dir
-        ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + self.strafe_dir * math.pi * 0.5
-        return (pos[0] + math.cos(ang) * 22.0, pos[1] + math.sin(ang) * 22.0)
+        if not self.k.get("fight_pos"):
+            if t - self.strafe_t > 1.4:
+                self.strafe_t = t
+                self.strafe_dir = -self.strafe_dir
+            ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + self.strafe_dir * math.pi * 0.5
+            return (pos[0] + math.cos(ang) * 22.0, pos[1] + math.sin(ang) * 22.0)
+        # Reuse a recent choice: sampling is LOS-heavy and the target barely moves at 20 Hz.
+        if self.fight_goal is not None and (t - self.fight_t) < 0.25:
+            return self.fight_goal
+        ready = self._weapon_ready(me) if me is not None else True
+        want_los = bool(ready) or d < 45.0
+        if self.k.get("peek") and not ready and d > 45.0:
+            want_los = False
+        pen = float(self.k.get("observer_penalty") or 0.0)
+        others = []
+        if observers and pen > 0.0:
+            for od, otr in observers:
+                if otr is tr or od > 170.0:
+                    continue
+                others.append((otr.x, otr.y))
+        base_ang = math.atan2(tr.y - pos[1], tr.x - pos[0])
+        best = None
+        best_score = -1e9
+        for rad in (9.0, 18.0):
+            for i in range(8):
+                ang = base_ang + i * (math.pi / 4.0)
+                gx = pos[0] + math.cos(ang) * rad
+                gy = pos[1] + math.sin(ang) * rad
+                if not self.w.inside(gx, gy) or not self.w.walkable(gx, gy):
+                    continue
+                if zc is not None and zr:
+                    if math.hypot(gx - zc[0], gy - zc[1]) > zr * 0.85:
+                        continue
+                los = self.w.has_los(gx, gy, tr.x, tr.y)
+                score = -1.1 * abs(math.hypot(gx - tr.x, gy - tr.y) - pref)
+                if want_los:
+                    score += 45.0 if los else -35.0
+                else:
+                    score += -45.0 if los else 0.0
+                for ex, ey in others:
+                    if self.w.has_los(ex, ey, gx, gy):
+                        score -= pen
+                if score > best_score:
+                    best_score = score
+                    best = (gx, gy)
+        if best is None:
+            ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + self.strafe_dir * math.pi * 0.5
+            best = (pos[0] + math.cos(ang) * 18.0, pos[1] + math.sin(ang) * 18.0)
+        self.fight_t = t
+        self.fight_goal = best
+        return best
 
     def _evade_goal(self, pos, tx, ty, zone_center, zr):
         """Flee while breaking line of sight: cover beats raw distance."""
