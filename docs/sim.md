@@ -101,16 +101,19 @@ mech dies because that fixes the score; the remaining houses do not need simulat
 * **House bots**: 15 scripted bots, 4 easy / 4 medium / 4 hard / 3 expert, with shared sensing,
   no friendly fire, starting secondaries by difficulty, weapon choice (lightning/laser/mortar/gun),
   strafing/orbiting at a preferred range, per-level aim error, reaction delay and engagement range.
-  They never attack each other. Two sensing models are available (`--house-vision`), because the
-  track only says they "share vision, prefer the weakest mech":
-  * `pings` (default): a shared noisy "where is the player" track refreshing every 6/4/2.5/1.5 s
-    with 70/45/25/12 m of error, plus the legacy 6 s memory leak. Over-informed, but keeps older
-    calibration numbers comparable.
-  * `vision`: union of what any living house actually sees (45 m ring / 120 deg cone / 200 m /
-    buildings block), shared for 3 s after the last sighting, no pings and no omniscience. This
-    is structurally the closer model. See the calibration section for the cost of the choice.
+  They never attack each other. Their skill is a set of explicit knobs (aim-error sigma, fire
+  discipline, burst discipline, engagement/preferred range, convergence) whose defaults are
+  calibrated against the real practice scores; see "House skill knobs" below. Two sensing models
+  are available (`--house-vision`), because the track only says they "share vision, prefer the
+  weakest mech":
+  * `pings` (CLI default, kept for continuity): a shared noisy "where is the player" track
+    refreshing every 6/4/2.5/1.5 s with 70/45/25/12 m of error, plus the legacy 6 s memory leak.
+    Over-informed: breaking line of sight never works.
+  * `vision` (the calibrated reference): union of what any living house actually sees (45 m ring /
+    120 deg cone / 200 m / buildings block), shared for 3 s after the last sighting, no pings and
+    no omniscience. This is structurally the closer model and the one the calibration targets.
   "Prefer the weakest" is moot in this solo track: all 15 houses have exactly one player mech to
-  hunt, so the pings noise table / vision union are the fidelity levers.
+  hunt, so the skill knobs and the shared-sensing model are the fidelity levers.
 * **Determinism**: everything (spawns, zones, loot, aim noise) is drawn from a `random.Random`
   seeded by the match seed. The same seed and config reproduce the same match; no wall-clock
   randomness and no imports of `bot/` state leaks between matches (the baked world is cached
@@ -118,16 +121,20 @@ mech dies because that fixes the score; the remaining houses do not need simulat
 
 ## Fidelity caveats (read before trusting an absolute number)
 
-* **Absolute scores are optimistic.** Calibration against the only independent number we have:
-  the kit's `example_bot.py` scores a reported ~1.15 on the track. In this simulator it means
-  **1.90 under `pings`** and **1.42 under `--house-vision vision`** over 48 matches, so the
-  default pings model is roughly **+0.5 to +0.8 score generous** for a passive bot, while the
-  vision model is only ~+0.3 generous. Use paired seeds to compare variants, not absolute values.
-* **The house-bot AI is invented.** We do not have the server's house code. Aim error, reaction,
-  engagement and the shared-sensing model are tuned so the example bot's survival sits in the
-  right ballpark. If the real houses are less coordinated, this sim is harsher; if they hunt
-  harder, it is too kind. `HOUSE_PING` in `tools/sim/match.py` and `--house-vision vision` are
-  the knobs; prefer paired runs under both when a tuning decision is close.
+* **Absolute scores are calibrated, not ground truth.** The default house-skill levels were tuned
+  so two independent anchors line up: the kit's `example_bot.py` (real practice score ~1.15)
+  scores **1.19** here and the real bot at commit `96478d5` (real **2.85**) scores **2.85** under
+  `--house-vision vision` over 48 seed-1 matches. At `866bf59` the real score is 3.04 and this
+  simulator gives **2.60**; the 0.4 gap is inside the 48-match noise (per-match sd ~3.9, so the
+  standard error of a 48-match mean is ~0.56). Absolute numbers are only meaningful with this
+  calibrated default set and the matching seed set; they will drift if `bot/**` or the house
+  knobs change. Re-run the two anchors after either changes.
+* **The house-bot AI is invented.** We do not have the server's house code. The skill knobs
+  (below) are the fidelity levers; the defaults reproduce the two anchors above, but the real
+  houses may distribute skill differently across the 15 bots. Treat differences of less than
+  ~one place (~0.3 score) as noise, and prefer paired seeds for A/B. The `pings` sensing model is
+  ~+0.3 score more generous than `vision` (calibrated reference), so quote `vision` numbers when
+  comparing with the real ladder.
 * **Movement is not a full physics clone.** The map walkability grid is `bot/world.py`'s 2 m grid;
   slopes, roof edges, overhang undersides and fine step-up geometry are approximated, and roofs
   are not traversed. Jet/gravity/boost use the protocol constants but not the server solver's
@@ -150,24 +157,76 @@ mech dies because that fixes the score; the remaining houses do not need simulat
 
 ## Calibration / reference numbers (seed 1, 48 matches, one core)
 
+The house-skill defaults were calibrated on 2026-11-21 against the two independent real practice
+scores we have. The reference command is
+`python tools/eval.py --matches 48 --seed 1 --house-vision vision` (add
+`--bot-dir .reports/bot_<commit>/bot` to score an exported older commit without touching `bot/`).
+
 ```
-house sensing   bot under test   mean score  mean place  mean survival
-pings (default) example bot           1.896      14.104        163.3 s
-vision          example bot           1.417      14.583        151.2 s
-pings (default) current bot           4.625      11.375        162.7 s
-vision          current bot           3.646      12.354        172.8 s
+bot under test          real practice   sim vision     sim pings    vision place / survival
+kit example_bot.py          ~1.15          1.188          1.458       14.81 / 140.9 s
+bot @ 96478d5                2.85          2.854          2.562       13.15 / 143.8 s
+bot @ 866bf59                3.04          2.604            --        13.40 / 122.8 s
 ```
 
+* `96478d5` is the primary anchor: real 2.85 vs simulated 2.854. The older commit `866bf59`
+  lands 0.44 low; that is inside the 48-match standard error (~0.56), and the two commits are
+  within noise of each other in the sim (2.60 vs 2.85) even though the real ladder separates them
+  by 0.19.
+* The example bot's real ~1.15 is matched to 0.04 under `vision`; under the `pings` sensing model
+  it is +0.27 high. Quote `vision` numbers when comparing with the real ladder.
+* Wall-clock for one 48-match cell: 35.6 s (example), 66.0 s (current bot) on this box, under the
+  90 s budget. Bot decisions: mean 0.30 ms, max 7.3 ms, 0/48 over the 50 ms budget, `bot_fails` 0.
+* Before this calibration (the old house levels in the previous version of this file) the same
+  cells read example 1.42 / current bot 4.90 under vision. Those absolute numbers are obsolete;
+  only runs made with the current defaults are comparable to the table above.
 
-The current bot row is a moving target: it was measured at `bot/policy.py` hash `68D4EF81FD87`
-(mtime 15:15, uncommitted work by the Lead, git HEAD `a3fd32d`). Earlier the same bot scored
-2.33 (a pre-cover/AI version); re-run the cell after `bot/**` settles if a number will be quoted.
+The bot is still bimodal against a coordinated hunt: at `96478d5` under vision it is 16th in 11
+of 48 matches and 15th in 13 more, with zero wins (best place 3); mean cubes 0.0 because it
+rarely survives long enough to loot. Early-game survivability, not the late game, is the
+bottleneck — consistent with the earlier, uncalibrated observation.
 
-Bimodality persists under the pings model: place 16 or 15 in 22 of 48 matches, but 5 wins where
-it snowballs to 16-29 cubes and 1900+ HP. Mean cubes 1.65. Its early-game survivability against
-a coordinated hunt is the clear bottleneck; navigation/zone discipline is fine (4.2 s average
-outside the zone, 304 zone damage). Decision latency in the final 48-match run was mean 0.2 ms /
-max 6.2 ms with 0 decisions over the 50 ms budget; `bot_fails` was 0.
+### House skill knobs (calibrated defaults)
+
+`tools/sim/house.py` `LEVELS` defines, per difficulty 1-4 (easy, medium, hard, expert):
+
+| knob | easy | medium | hard | expert | meaning |
+|---|---|---|---|---|---|
+| `aim_sigma_deg` | 4.42 | 2.72 | 1.53 | 0.85 | Gaussian aim error added to every shot (degrees, 1-sigma) |
+| `fire_tol_deg` | 4.0 | 2.8 | 1.8 | 1.1 | only fire when the torso is within this angle of the solution |
+| `burst_s` / `burst_pause_s` | 99 / 0 | 99 / 0 | 99 / 0 | 99 / 0 | gun burst length / pause (99 = continuous fire, disabled by default) |
+| `engage_m` | 130 | 165 | 195 | 215 | max range at which the house will shoot at the player |
+| `pref_m` | 85 | 95 | 105 | 115 | preferred orbit distance (smaller = closes in harder) |
+| `react` | 0.9 | 0.55 | 0.3 | 0.15 | seconds between first sighting and first shot |
+| `secondary` | 0.15 | 0.35 | 0.60 | 0.85 | chance of starting with a looted secondary |
+| `strafe` | 2.2 | 1.8 | 1.5 | 1.2 | seconds between strafe-direction flips |
+| `converge` | 1.0 | 1.0 | 1.0 | 1.0 | movement-speed factor while chasing the shared player track |
+| `converge_boost` | 1 | 1 | 1 | 1 | boost toward a shared sighting when farther than 60 m (energy permitting) |
+
+Override at run time with repeated `--house-knob key=value` (applied to every level; values are
+floats, so `--house-knob aim_sigma_deg=3.0 --house-knob converge_boost=0`). The full key list is
+`tools/sim/house.py` `DEFAULT_SKILL`; unknown keys are rejected by the CLI. Knobs are recorded in
+the JSON payload (`house_skill`) so a calibration run is reproducible.
+
+What moved the score (48 seed-1 matches, `--house-vision vision`, HEAD `96478d5`):
+
+```
+aim_sigma scale (relative to the pre-calibration 2.6/1.6/0.9/0.5 degrees)
+1.0 (tight)   bot ~1.6     example ~1.06      houses snipe; both bots die fast
+1.7 (default) bot  2.85    example  1.19      calibrated point
+1.8-1.9       bot  2.6-3.4 example  1.1-1.4   (48-match noise ~±0.6)
+2.2+ (loose)  bot  3.5-4.1 example ~1.4       houses spray; bot survives longer
+```
+
+* **`aim_sigma_deg` is by far the strongest lever** for this bot: loosening it from the
+  pre-calibration value to the calibrated one moved the current-bot score by ~1.5-2 points and
+  changed the example bot very little (its deaths are ~60% zone, not house fire).
+* **`converge_boost`** is the second lever (~0.4-0.5 score in a 16-match screen): with boosting
+  on, the house team arrives at a shared sighting faster, which raises pressure on a mobile bot.
+* **`engage_m`/`pref_m`** shift the fight distance by ~0.2-0.3 score; **`react`/`secondary`** are
+  minor once sigma is set; **burst discipline** is a no-op at its default (99 s = continuous) and
+  only becomes useful if the real houses are modelled as burst-limited.
+
 
 ### House sensing: pings vs vision
 

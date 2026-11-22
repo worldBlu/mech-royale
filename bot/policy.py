@@ -19,28 +19,28 @@ KNOBS = {
     "engage_hp_frac": 0.30,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 0.25,      # running away when a fresh hostile is close
+    "evade_hp_frac": 0.15,      # running away when a fresh hostile is close
     "evade_dist": 120.0,
-    "evade_aimed_hp": 0.30,     # someone is pointing a weapon at us
+    "evade_aimed_hp": 0.00,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
-    "farm_threat": 60.0,
-    "farm_r": 300.0,
+    "farm_threat": 40.0,
+    "farm_r": 400.0,
     "farm_hp": 0.35,
-    "crate_threat": 60.0,
-    "crate_r": 250.0,
+    "crate_threat": 40.0,
+    "crate_r": 300.0,
     "loot_threat": 60.0,
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 0.80,            # start healing below this fraction
-    "heal_exit": 0.97,          # stop at this fraction
+    "heal_hp": 0.55,            # start healing below this fraction
+    "heal_exit": 0.62,          # stop at this fraction
     "heal_safe_dist": 140.0,    # only heal when the nearest fresh hostile is farther
     "heal_los": 0,              # heal whenever nobody can see us, distance regardless
     "heal_los_dist": 200.0,     # only consider hostiles this close for the LOS test
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
-    "drop_early": 0,            # start walking to a supply drop before it lands
+    "drop_early": 1,            # start walking to a supply drop before it lands
     "early_evade_s": 0.0,       # treat every fresh contact as a reason to run this early
     "dodge": 1,                 # side-step shells that are about to pass through us
     "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
