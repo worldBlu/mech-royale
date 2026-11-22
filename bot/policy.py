@@ -24,8 +24,8 @@ KNOBS = {
     "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
-    "farm_threat": 260.0,
-    "crate_threat": 260.0,
+    "farm_threat": 140.0,
+    "crate_threat": 150.0,
     "loot_threat": 60.0,
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
@@ -41,7 +41,7 @@ KNOBS = {
     "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
-    "target_ttk": 0,            # choose the target we can finish soonest instead (experimental)
+    "target_ttk": 1,            # choose the target we can finish soonest instead (experimental)
     "drop_early": 0,            # start walking to a supply drop before it lands
     "early_evade_s": 0.0,       # treat every fresh contact as a reason to run this early
     "dodge": 1,                 # side-step shells that are about to pass through us
