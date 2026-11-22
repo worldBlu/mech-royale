@@ -220,11 +220,11 @@ forward, 2 m straight back). A candidate is accepted only when:
 Among equally covered candidates the one the threat cannot see (`has_los`) wins, then the
 shortest detour. The shift is applied once per planned waypoint (`_cover_target`), never again
 to the same point, so the mech cannot creep sideways tick after tick; the returned point is
-always a verified walkable one, so `steer_cover` can never return a blocked cell. `threat_pos
-=None` degrades to plain `steer`. The signature mirrors `steer` (returns `(dx, dy,
+always a verified walkable one, so `steer_cover` can never return a blocked cell. A `None`
+`threat_pos` degrades to plain `steer`. The signature mirrors `steer` (returns `(dx, dy,
 distance_left)`) and sets `last_cover` / `last_cover_shift` for logging. Cost is bounded: on
-replan ticks seven candidates × (two `path_clear` + one `cover_quality`), tens of microseconds;
-on non-replan ticks it is exactly `steer`.
+replan ticks seven candidates × (two `path_clear` + one `cover_quality`), roughly 50 µs per
+shift tick; on non-replan ticks it is exactly `steer`.
 
 The bench `--cover` mode walks the same 200 routes twice at 20 Hz in 2 m steps, placing an enemy
 30–90 m off each route midpoint (snapped to walkable ground), once with `steer` and once with
