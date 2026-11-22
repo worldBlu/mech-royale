@@ -17,13 +17,12 @@ import sys
 import time
 
 CONFIGS = [
-    ("base", {}),
-    ("noPeek", {"peek": 0}),
-    ("noFightPos", {"fight_pos": 0}),
-    ("noRetaliate", {"retaliate": 0}),
-    ("campOff", {"camp": 0}),
-    ("allOff", {"peek": 0, "fight_pos": 0, "retaliate": 0}),
-    ("pen60", {"observer_penalty": 60.0}),
+    ("base", {"camp": 0}),
+    ("noHeal", {"camp": 0, "heal": 0}),
+    ("rush", {"camp": 0, "rush_s": 150.0, "rush_dist": 220.0}),
+    ("e120", {"camp": 0, "engage_dist": 120.0}),
+    ("e300", {"camp": 0, "engage_dist": 300.0}),
+    ("ev35", {"camp": 0, "evade_hp_frac": 0.35, "evade_dist": 140.0}),
 ]
 
 

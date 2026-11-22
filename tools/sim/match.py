@@ -114,6 +114,7 @@ class Match:
         self.player_place = None
         self.player_offer_seq = 0
         self.house_player_pos = None
+        self.house_player_z = None
         self.house_player_seen_t = -1e9
         self.house_player_visible = False
         self.house_ping_t = 0.0
@@ -1146,6 +1147,7 @@ class Match:
         self.house_player_visible = sight > 0
         if sight:
             self.house_player_pos = [self.player.pos[0], self.player.pos[1]]
+            self.house_player_z = float(self.player.pos[2])
             self.house_player_seen_t = self.t
         if self.house_vision == "vision":
             # Shared sight only: keep the last exact position for a short team memory, then

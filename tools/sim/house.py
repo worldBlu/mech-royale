@@ -73,7 +73,9 @@ PRESETS = {
             "fire_tol_scale": 0.80,
             "react_scale": 0.45,
             "engage_add": 20.0,
-            "pref_scale": 0.50,
+            "pref_scale": 1.00,
+            "close_when_blind": 1,
+            "blind_mortar": 1,
             "converge_boost_energy": 8.0,
         },
         "sense": {"shared_memory": 18.0, "ping_interval": 1.8, "ping_noise": 10.0},
@@ -232,7 +234,21 @@ class HouseAI:
             dy = known[1] - mech.pos[1]
             dist = math.hypot(dx, dy)
             pref = cfg["pref_m"]
-            if dist > pref + 30.0:
+            if cfg.get("close_when_blind") and not visible:
+                # Stale lock: keep closing on the last-known position until the target is
+                # reacquired.  Once we are on top of it, orbit the spot so the search sweeps
+                # around the cover the target is hiding behind (that is what punishes camping).
+                if dist > 18.0:
+                    self._toward(mech, known[0], known[1], 18.0, cfg["converge"])
+                    boost = (bool(cfg.get("converge_boost", 1.0)) and dist > 45.0
+                             and mech.energy > float(cfg.get("converge_boost_energy", 25.0)))
+                else:
+                    if t - self.strafe_t > cfg["strafe"]:
+                        self.strafe_t = t
+                        self.strafe_dir = -self.strafe_dir
+                    sd = self.strafe_dir
+                    self._set_move(mech, -dy * sd, dx * sd)
+            elif dist > pref + 30.0:
                 self._toward(mech, known[0], known[1], 5.0, cfg["converge"])
                 # converge faster: houses boost towards a shared sighting when far away
                 boost = (bool(cfg.get("converge_boost", 1.0)) and dist > 60.0
@@ -272,6 +288,8 @@ class HouseAI:
         if not visible or not player.alive:
             if self.charge_slot is not None:
                 self._abort_charge(mech)
+            if player.alive and cfg.get("blind_mortar"):
+                self._suppress(match)
             self._defend_against_npc(match, t)
             return
         tx = player.pos[0]
@@ -314,6 +332,39 @@ class HouseAI:
         else:
             self.burst_start = None
         match.combat.fire(mech, slot, self.err)
+
+    def _suppress(self, match):
+        """Lob a mortar shell at the squad's last-known player position (no LOS required).
+
+        Real house bots are described as a coordinated squad; indirect fire on a stale lock is
+        a plausible way they stop one camper from hiding for the whole match.  Damage still
+        goes through the normal splash path, so being somewhere else is a full escape."""
+        mech = self.mech
+        known = match.house_player_pos
+        if known is None:
+            return False
+        slot = mech.holding("mortar")
+        if slot is None:
+            return False
+        w = mech.weapons[slot]
+        t = match.t
+        if w.cooldown > 0.0 or t < w.ready_at or mech.energy < 1.0:
+            return False
+        d = math.hypot(known[0] - mech.pos[0], known[1] - mech.pos[1])
+        if not (55.0 <= d <= 205.0):
+            return False
+        kz = getattr(match, "house_player_z", None)
+        if kz is None:
+            kz = match.world.terrain_z(known[0], known[1])
+        yaw, pitch = match.combat.aim_at(mech, known[0], known[1], kz + 1.0, "mortar")
+        mech.cmd_aim[0] = yaw
+        mech.cmd_aim[1] = pitch
+        if abs(ang_diff(mech.aim[0], yaw)) > self.tol * 1.5:
+            return False
+        if abs(mech.aim[1] - pitch) > self.tol * 2.0:
+            return False
+        match.combat.fire(mech, slot, self.err)
+        return True
 
     def _drive_laser(self, match, slot, tx, ty, tz, dist):
         mech = self.mech

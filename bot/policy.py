@@ -15,29 +15,24 @@ KIND_VALUE = {"laser": 3.0, "mortar": 2.0, "lightning": 2.2, "gun": 0.2}
 # Tunables. The evaluation harness mutates this dict in place, so every knob below is read
 # through ``self.k`` at decision time and an override takes effect on the next tick.
 KNOBS = {
-    "engage_dist": 200.0,       # do not pick a fight with a target farther than this
+    "engage_dist": 260.0,       # do not pick a fight with a target farther than this
     "engage_hp_frac": 0.30,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 0.50,      # running away when a fresh hostile is close
-    "evade_dist": 180.0,
-    "evade_aimed_hp": 0.30,     # someone is pointing a weapon at us
+    "evade_hp_frac": 0.30,      # running away when a fresh hostile is close
+    "evade_dist": 120.0,
+    "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
-    "farm_threat": 60.0,
-    "farm_r": 300.0,
-    "farm_hp": 0.35,
-    "crate_threat": 60.0,
-    "crate_r": 250.0,
+    "farm_threat": 140.0,
+    "crate_threat": 150.0,
     "loot_threat": 60.0,
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 0.60,            # start healing below this fraction
-    "heal_exit": 0.80,          # stop at this fraction
+    "heal_hp": 0.95,            # start healing below this fraction
+    "heal_exit": 0.97,          # stop at this fraction
     "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
-    "heal_los": 0,              # heal whenever nobody can see us, distance regardless
-    "heal_los_dist": 200.0,     # only consider hostiles this close for the LOS test
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
     "drop_early": 0,            # start walking to a supply drop before it lands
@@ -45,23 +40,17 @@ KNOBS = {
     "dodge": 1,                 # side-step shells that are about to pass through us
     "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
     "rush_dist": 170.0,         # only chase gear this far
-    "weapon_r": 150.0,          # grab a spare weapon from this far away (it doubles our damage)
     "finish_hp": 0.90,           # close in and finish targets below this hp fraction
     "finish_d": 35.0,           # preferred range while finishing
-    "chase": 1,                 # keep pushing a wounded target that slipped out of sight
-    "camp": 1,                  # hold a low-exposure spot inside the next zone
-    "camp_frac": 0.60,          # stay inside this fraction of the next radius
-    "camp_leave": 10.0,         # seconds of slack before the next shrink to relocate
-    "outnumber": 1,             # extra caution when more than one fresh hostile is visible
+    "camp": 0,                  # hold a low-exposure spot inside the next zone
+    "camp_frac": 0.75,          # stay inside this fraction of the next radius
+    "camp_leave": 12.0,         # seconds of slack before the next shrink to relocate
+    "outnumber": 0,             # extra caution when more than one fresh hostile is visible
     "evade_sticky": 3.0,        # keep running this long after the trigger clears
     "trade_hp": 0.80,           # disengage when we are losing a duel...
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
-    "standoff": {"gun": 100.0, "laser": 150.0, "mortar": 150.0, "lightning": 28.0},
-    "fight_pos": 0,             # score fight positions instead of blind strafing
-    "observer_penalty": 25.0,   # cost of standing where another mech can see us
-    "peek": 0,                  # break line of sight while the primary weapon is not ready
-    "retaliate": 0,             # shoot whoever shot us last, not just the weakest mech
+    "standoff": {"gun": 120.0, "laser": 160.0, "mortar": 150.0, "lightning": 28.0},
 }
 
 
@@ -109,10 +98,6 @@ class Policy:
         self.pickup_r = float(loot.get("pickup_radius", 4.0))
         self.cube_r = float(cubes.get("pickup_radius", 3.5))
         self.drops_cfg = cfg.get("drops") or {}
-        self.hit_by = {}
-        self.fight_t = -99.0
-        self.fight_goal = None
-        self.attackers = []
 
     # ------------------------------------------------------------------ main
     def act(self, obs):
@@ -136,21 +121,6 @@ class Policy:
         fresh_hostiles = [(d, tr) for d, tr in hostiles if (t - tr.seen) < 0.5]
         threat = fresh_hostiles[0][1] if fresh_hostiles else None
         threat_d = fresh_hostiles[0][0] if fresh_hostiles else 1e9
-        chase = None
-        _fin = float(self.k.get("finish_hp") or 0.0)
-        if self.k.get("chase") and _fin > 0.0:
-            _best = None
-            _bd = 1e9
-            for _d, _tr in hostiles:
-                _hp = float(getattr(_tr, "hp", 0.0) or 0.0)
-                if _hp <= 0.0 or _hp / 1400.0 >= _fin:
-                    continue
-                if (t - _tr.seen) > 6.0 or _d > 220.0:
-                    continue
-                if _d < _bd:
-                    _bd = _d
-                    _best = _tr
-            chase = _best
         ghost = None
         if hostiles and (t - hostiles[0][1].seen) >= 0.5:
             ghost = hostiles[0]
@@ -161,15 +131,6 @@ class Policy:
                     hp = getattr(h[1], "hp", None)
                     return hp if hp and hp > 0.0 else 1e9
                 threat_d, threat = min(cands, key=lambda h: _hp(h))
-        # Retaliation outranks "weakest": the bot that just shot us is the one that knows
-        # where we are, and killing it stops the damage instead of chasing a distant cripple.
-        if self.k.get("retaliate") and (t - self.perc.last_damaged) < 4.0:
-            _aid = self.perc.last_attacker
-            if _aid is not None:
-                for _d, _tr in fresh_hostiles:
-                    if int(getattr(_tr, "id", -1)) == int(_aid):
-                        threat, threat_d = _tr, _d
-                        break
         fresh = threat is not None
 
         zone = obs["zone"]
@@ -245,16 +206,6 @@ class Policy:
             and hp_frac < k["heal_exit"]
             and (threat is None or (not fresh) or threat_d > k["heal_safe_dist"])
         )
-        if k.get("heal_los") and k.get("heal") and hp_frac < k["heal_exit"]:
-            _seen = False
-            _eye = (pos[0], pos[1], pos[2] + 8.0)
-            for _d, _tr in fresh_hostiles:
-                if _d > k.get("heal_los_dist", 200.0):
-                    continue
-                if self.w.has_los(_eye, (_tr.x, _tr.y, _tr.z + 4.5)):
-                    _seen = True
-                    break
-            heal = (not _seen) and hp_frac < k["heal_hp"]
         if not in_zone:
             mode = "ZONE"
             goal = self._zone_goal(obs, pos)
@@ -263,11 +214,9 @@ class Policy:
             if threat is not None and fresh:
                 self.evade_from = (threat.x, threat.y)
             goal = self._evade_goal(pos, self.evade_from[0], self.evade_from[1], zone_center, zr)
-        elif threat is not None and fresh and threat_d < k["engage_dist"] and fight_ok:
-            mode = "FIGHT"
-            goal = self._fight_goal(
-                pos, threat, threat_d, t, me, fresh_hostiles, zone_center, zr
-            )
+        elif camp_goal is not None:
+            mode = "CAMP"
+            goal = None if camp_arrived else camp_goal
         elif rush_goal is not None:
             mode = "RUSH"
             goal = rush_goal
@@ -280,31 +229,21 @@ class Policy:
                 pos[0] + math.cos(self.rng.uniform(0.0, 2.0 * math.pi)) * 30.0,
                 pos[1] + math.sin(self.rng.uniform(0.0, 2.0 * math.pi)) * 30.0,
             )
-        elif take_goal is not None and threat_d > 40.0:
+        elif take_goal is not None and threat_d > 60.0:
             mode = "LOOT"
             goal = take_goal
         elif cube_goal is not None:
             mode = "LOOT"
             goal = cube_goal
-        elif (
-            chase is not None
-            and threat is None
-            and hp_frac > 0.55
-            and self.k.get("chase")
-        ):
-            mode = "CHASE"
-            goal = (chase.x, chase.y)
+        elif threat is not None and fresh and threat_d < k["engage_dist"] and fight_ok:
+            mode = "FIGHT"
+            goal = self._fight_goal(pos, threat, threat_d, t)
         elif npc_tr is not None:
             mode = "FARM"
             goal = self._farm_goal(pos, npc_tr, npc_d)
         elif crate is not None:
             mode = "FARM"
             goal = self._crate_goal(pos, crate)
-        elif camp_goal is not None:
-            # Camping is a fallback posture, not a priority: it used to sit above the loot
-            # branches, which silently starved weapon pickups and cube collection.
-            mode = "CAMP"
-            goal = None if camp_arrived else camp_goal
         else:
             mode = "ROTATE"
             goal = self._rotate_goal(obs, pos, zone_center, next_center, next_r)
@@ -330,14 +269,7 @@ class Policy:
         self.last_pos = (pos[0], pos[1])
         self.goal = goal
 
-        _threat_pos = (
-            (threat.x, threat.y, threat.z) if (threat is not None and fresh) else None
-        )
-        steer = (
-            self.nav.steer_cover(pos, goal, _threat_pos, t)
-            if goal is not None
-            else None
-        )
+        steer = self.nav.steer(pos, goal, t) if goal is not None else None
         move = [0.0, 0.0]
         dist_goal = 0.0
         if steer is not None:
@@ -396,7 +328,7 @@ class Policy:
             and not self.combat.charging
             and (
                 (not in_zone)
-                or (mode in ("EVADE", "DROP", "LOOT", "RUSH", "CHASE") and dist_goal > 45.0)
+                or (mode in ("EVADE", "DROP", "LOOT", "RUSH") and dist_goal > 45.0)
                 or (mode == "ROTATE" and dist_goal > 70.0)
                 or (mode == "ZONE" and dist_goal > 30.0)
             )
@@ -488,13 +420,12 @@ class Policy:
             return None, None
         best = None
         best_s = -1.0
-        reach = float(self.k.get("weapon_r") or 150.0)
         for p in obs.get("pickups") or []:
             kind = p.get("kind")
             if kind is None or kind == "gun":
                 continue
             d = math.dist(p["pos"][:2], pos[:2])
-            if d > reach:
+            if d > 90.0:
                 continue
             s = KIND_VALUE.get(kind, 0.0) * 100.0 - d
             if kind == "mortar":
@@ -504,7 +435,7 @@ class Policy:
                 best = p
         if best is None:
             return None, None
-        if threat_d < 25.0:
+        if threat_d < 35.0:
             return None, None
         return best["id"], (best["pos"][0], best["pos"][1])
 
@@ -585,8 +516,7 @@ class Policy:
             d = math.dist(p["pos"][:2], pos[:2])
             if d > reach:
                 continue
-            _rush_val = {"lightning": 4.0, "laser": 3.0}
-            sc = _rush_val.get(kind, 0.0) * 100.0 - d
+            sc = KIND_VALUE.get(kind, 0.0) * 100.0 - d
             if sc > best_s:
                 best_s = sc
                 best = p
@@ -651,11 +581,11 @@ class Policy:
     # ------------------------------------------------------------------ farming
     def _npc_step(self, obs, t, threat_d, hp_frac):
         """Drones wander close and drop two cubes; farm one when nothing else is urgent."""
-        if hp_frac < self.k["farm_hp"] or threat_d < self.k["farm_threat"]:
+        if hp_frac < 0.5 or threat_d < self.k["farm_threat"]:
             return 1e9, None
         best = None
         best_d = 1e9
-        for d, tr in self.perc.npcs(t, self.k["farm_r"]):
+        for d, tr in self.perc.npcs(t, 95.0):
             if t - tr.seen > 0.5:
                 continue
             if d < best_d:
@@ -678,7 +608,7 @@ class Policy:
         best_d = 1e9
         for c in obs.get("crates") or []:
             d = math.dist(c["pos"][:2], pos[:2])
-            if d > self.k["crate_r"] or d < 6.0:
+            if d > 95.0 or d < 6.0:
                 continue
             if d < best_d and self.w.has_los(pos[0], pos[1], c["pos"][0], c["pos"][1]):
                 best_d = d
@@ -723,24 +653,7 @@ class Policy:
         return out
 
     # ------------------------------------------------------------------ fight
-    def _weapon_ready(self, me):
-        """True when the weapon we would fire right now is loaded and off cooldown."""
-        for w in me.get("weapons") or []:
-            if not w:
-                continue
-            kind = w.get("kind") or "gun"
-            if float(w.get("reload") or 0.0) > 0.0:
-                continue
-            if float(w.get("cooldown") or 0.0) > 0.10:
-                continue
-            if kind == "gun" and float(w.get("ammo") or 0.0) <= 0.0:
-                continue
-            if kind == "laser" and float(w.get("charge") or 0.0) < 0.70:
-                continue
-            return True
-        return False
-
-    def _fight_goal(self, pos, tr, d, t, me=None, observers=None, zc=None, zr=None):
+    def _fight_goal(self, pos, tr, d, t):
         kind = self.combat.last_kind or "gun"
         pref = float(self.k["standoff"].get(kind, 120.0))
         fin = float(self.k.get("finish_hp") or 0.0)
@@ -753,57 +666,11 @@ class Policy:
         if d < pref - 45.0:
             ang = math.atan2(pos[1] - tr.y, pos[0] - tr.x)
             return (pos[0] + math.cos(ang) * 45.0, pos[1] + math.sin(ang) * 45.0)
-        if not self.k.get("fight_pos"):
-            if t - self.strafe_t > 1.4:
-                self.strafe_t = t
-                self.strafe_dir = -self.strafe_dir
-            ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + self.strafe_dir * math.pi * 0.5
-            return (pos[0] + math.cos(ang) * 22.0, pos[1] + math.sin(ang) * 22.0)
-        # Reuse a recent choice: sampling is LOS-heavy and the target barely moves at 20 Hz.
-        if self.fight_goal is not None and (t - self.fight_t) < 0.25:
-            return self.fight_goal
-        ready = self._weapon_ready(me) if me is not None else True
-        want_los = bool(ready) or d < 45.0
-        if self.k.get("peek") and not ready and d > 45.0:
-            want_los = False
-        pen = float(self.k.get("observer_penalty") or 0.0)
-        others = []
-        if observers and pen > 0.0:
-            for od, otr in observers:
-                if otr is tr or od > 170.0:
-                    continue
-                others.append((otr.x, otr.y))
-        base_ang = math.atan2(tr.y - pos[1], tr.x - pos[0])
-        best = None
-        best_score = -1e9
-        for rad in (9.0, 18.0):
-            for i in range(8):
-                ang = base_ang + i * (math.pi / 4.0)
-                gx = pos[0] + math.cos(ang) * rad
-                gy = pos[1] + math.sin(ang) * rad
-                if not self.w.inside(gx, gy) or not self.w.walkable(gx, gy):
-                    continue
-                if zc is not None and zr:
-                    if math.hypot(gx - zc[0], gy - zc[1]) > zr * 0.85:
-                        continue
-                los = self.w.has_los(gx, gy, tr.x, tr.y)
-                score = -1.1 * abs(math.hypot(gx - tr.x, gy - tr.y) - pref)
-                if want_los:
-                    score += 45.0 if los else -35.0
-                else:
-                    score += -45.0 if los else 0.0
-                for ex, ey in others:
-                    if self.w.has_los(ex, ey, gx, gy):
-                        score -= pen
-                if score > best_score:
-                    best_score = score
-                    best = (gx, gy)
-        if best is None:
-            ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + self.strafe_dir * math.pi * 0.5
-            best = (pos[0] + math.cos(ang) * 18.0, pos[1] + math.sin(ang) * 18.0)
-        self.fight_t = t
-        self.fight_goal = best
-        return best
+        if t - self.strafe_t > 1.4:
+            self.strafe_t = t
+            self.strafe_dir = -self.strafe_dir
+        ang = math.atan2(tr.y - pos[1], tr.x - pos[0]) + self.strafe_dir * math.pi * 0.5
+        return (pos[0] + math.cos(ang) * 22.0, pos[1] + math.sin(ang) * 22.0)
 
     def _evade_goal(self, pos, tx, ty, zone_center, zr):
         """Flee while breaking line of sight: cover beats raw distance."""
