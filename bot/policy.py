@@ -35,7 +35,7 @@ KNOBS = {
     "jink": 1,                   # weave while moving so their gun has to lead a wobbly target
     "jink_frac": 0.55,
     "jink_hz": 1.1,
-    "jink_dist": 420.0,
+    "jink_dist": 260.0,
     "panic_dmg": 1e9,          # armor lost per second that makes us break contact
     "panic_s": 2.5,              # how long that duck-out lasts
     "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
@@ -43,7 +43,7 @@ KNOBS = {
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
     "target_ttk": 0,            # choose the target we can finish soonest instead (experimental)
     "drop_early": 0,            # start walking to a supply drop before it lands
-    "early_evade_s": 0.0,       # treat every fresh contact as a reason to run this early
+    "early_evade_s": 45.0,       # treat every fresh contact as a reason to run this early
     "dodge": 1,                 # side-step shells that are about to pass through us
     "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
     "rush_dist": 170.0,
