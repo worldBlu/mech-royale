@@ -1,4 +1,4 @@
-"""Parallel policy screen: run several knob sets on the same seeds, compare paired scores.
+﻿"""Parallel policy screen: run several knob sets on the same seeds, compare paired scores.
 
   python tools/screen.py --matches 192 --jobs 6 --out reports/screen1
 
@@ -18,11 +18,12 @@ import time
 
 CONFIGS = [
     ("base", {}),
-    ("rush90", {"rush_s": 90.0}),
-    ("rush150", {"rush_s": 150.0}),
-    ("rush90d240", {"rush_s": 90.0, "rush_dist": 240.0}),
-    ("pacifist", {"engage_dist": 0.01, "evade_hp_frac": 1.0, "evade_dist": 220.0}),
-    ("pacifistHeal", {"engage_dist": 0.01, "evade_hp_frac": 1.0, "evade_dist": 220.0, "heal_hp": 1.0, "heal_safe_dist": 120.0}),
+    ("outFinish", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0}),
+    ("ofNoCamp", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0}),
+    ("ofGun80NoCamp", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0, "standoff": {"gun": 80.0, "laser": 150.0, "mortar": 150.0, "lightning": 28.0}}),
+    ("ofNoCampRush0", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0, "rush_s": 0.0}),
+    ("ofNoCampHeal", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0, "heal_hp": 0.95, "heal_exit": 0.98, "heal_safe_dist": 200.0}),
+    ("ofNoCampEvade", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0, "evade_hp_frac": 0.30, "evade_dist": 140.0}),
 ]
 
 
