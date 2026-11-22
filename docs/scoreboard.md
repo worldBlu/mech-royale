@@ -1,4 +1,4 @@
-# Scoreboard
+﻿# Scoreboard
 
 Practice score is `mean(16 - place)` over the practice board's matches against the house-bot squad.
 Baseline to beat: **1.15** (the kit's Python example bot).
@@ -19,7 +19,7 @@ the current ranking.
 | 1 | `866bf59d4447ec75c2aca6974eaf9535970bedc4` | 2026-11-21 18:45 PST | builders-3 | **3.04** (BB-4351EDA2) | first real submission; sim said 4.3-4.7 for this build |
 | 2 | `96478d51ed80c1e5df75d60ef895cbda87251430 | 2026-11-21 19:11 PST | builders-3 | **2.85** (BB-71AB9C8D) | combo policy (evade 55%/180, heal 95%/250) + `use_mortar`/terrain clamp |
 | 3 | `2b5adf50b452aecb8d5f6985d1dc2d7d7da22463` | 2026-11-21 19:34 PST | builders-3 | **2.35** (BB-B883CB52) | turtle experiment: never engage, flee every contact, heal to full. Clear regression |
-| 4 | `a548d11be32a78c9f578a8c6a0ba0ea10547716f` | 2026-11-21 19:39 PST | builders-3, rescored **builders-4** | **3.29** → **3.27** (BB-39151ABF) | revert turtle; camp mode (off), finish wounded below 60%, aggro defaults (engage 260 m, 30% hp, rush 90 s). **Current final entry and best score**: the organisers rescored the picked builders-3 entry onto builders-4 |
+| 4 | `a548d11be32a78c9f578a8c6a0ba0ea10547716f` | 2026-11-21 19:39 PST | builders-3, rescored **builders-4** | **3.29** â†’ **3.27** (BB-39151ABF) | revert turtle; camp mode (off), finish wounded below 60%, aggro defaults (engage 260 m, 30% hp, rush 90 s). **Current final entry and best score**: the organisers rescored the picked builders-3 entry onto builders-4 |
 | 5 | `af9930c98481c86ed6a8de9d2e8fea6530d6bb8d` | 2026-11-21 19:43 PST | builders-3 | **3.02** (BB-DF3DCAD1) | chase wounded out of sight, finish below 75%, closer standoff (gun 100/laser 150), lightning first |
 | 6 | `72b2d2aec9b36d55370a8df4b83696555a92bb2a` | 2026-11-21 19:47 PST | builders-3 | **0.71** (BB-D9FA9061) | heal behind cover whenever unseen. Disaster: the bot hides and heals instead of fighting |
 | 7 | `914fd366a58240a49b48340444d21915d14ada7b` | 2026-11-21 23:23 PST | builders-4 | **2.51** (BB-3882AF7D) | squad posture v1: farm drones/crates far (300/250 m), hold ground instead of running, fight back when aimed at |
@@ -31,7 +31,7 @@ the current ranking.
 | 13 | `0362f4724d1e6b2bc15909b4425ef243d918a050` | 2026-11-22 00:21 PST | builders-4 | **2.74** (BB-7B3C2EA0) | camp demoted to a fallback (it was starving every loot branch), weapons looted from 150 m, heal only below 60% |
 | 14 | `c23391169d3ea7d8356d1f911aa9c73f17b0c5e9` | 2026-11-22 01:27 PST | builders-4 | **3.35** (BB-6CDB28E4) | rebuilt from the 3.27 aggressive profile (`a548d11`) and only changed the finish rule (below 90%). **Best score so far; picked as the final entry** |
 | 15 | `4aeed5fa8aa155be980636a94f1edba4b22f2a2c` | 2026-11-22 01:31 PST | builders-4 | **3.27** (BB-7FF714D0) | braver still: evade only under 18% hp inside 100 m, heal from 75%. No gain over 3.35 |
-| 16 | `5fbb728a0f28a8f697437f48121cd8d089ba6f20` | 2026-11-22 01:36 PST | builders-4 | pending (BB-49CB69F2) | 3.35 build + weapon detours from 150 m while a fight is near (only refuse inside 25 m) |
+| 16 | `5fbb728a0f28a8f697437f48121cd8d089ba6f20` | 2026-11-22 01:36 PST | builders-4 | **3.36** (BB-49CB69F2) | 3.35 build + weapon detours from 150 m while a fight is near (only refuse inside 25 m). Current best and current final entry |
 
 **Lessons so far**
 
@@ -50,3 +50,6 @@ once we "pick" an entry it stops auto-replacing. After each new best, pick it ag
 - the exact commit hash that was submitted (the organisers keep a copy of every scored commit),
 - the reported score and any reject reason,
 - what changed in that submission and what we expected.
+| 17 | `bce2a36ae8f2edde09b11e9fd3fc49aa93e584bf` | 2026-11-22 01:40 PST | builders-4 | pending (BB-1596495A) | the aggressive profile ported onto the current policy code (loot reach, camp fallback, fight-position machinery off) |
+| 18 | `fd015ddddb4e481a681571f6d6f54548f200bac8` | 2026-11-22 02:13 PST | builders-4 | pending | score fight positions: stay out of other bots' lines of sight while firing, duck while reloading |
+| 19 | `6f84359d77a6855048638842ba78c2eb2081a490` | 2026-11-22 02:35 PST | builders-4 | pending | + chase a wounded target that slipped out of sight |
