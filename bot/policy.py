@@ -33,6 +33,8 @@ KNOBS = {
     "heal_hp": 0.95,            # start healing below this fraction
     "heal_exit": 0.97,          # stop at this fraction
     "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
+    "heal_los": 1,              # heal whenever nobody can see us, distance regardless
+    "heal_los_dist": 200.0,     # only consider hostiles this close for the LOS test
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
     "drop_early": 0,            # start walking to a supply drop before it lands
@@ -222,6 +224,16 @@ class Policy:
             and hp_frac < k["heal_exit"]
             and (threat is None or (not fresh) or threat_d > k["heal_safe_dist"])
         )
+        if k.get("heal_los") and k.get("heal") and hp_frac < k["heal_exit"]:
+            _seen = False
+            _eye = (pos[0], pos[1], pos[2] + 8.0)
+            for _d, _tr in fresh_hostiles:
+                if _d > k.get("heal_los_dist", 200.0):
+                    continue
+                if self.w.has_los(_eye, (_tr.x, _tr.y, _tr.z + 4.5)):
+                    _seen = True
+                    break
+            heal = (not _seen) and hp_frac < k["heal_hp"]
         if not in_zone:
             mode = "ZONE"
             goal = self._zone_goal(obs, pos)
