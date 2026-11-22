@@ -23,11 +23,11 @@ KNOBS = {
     "evade_dist": 180.0,
     "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
-    "evade_step": 140.0,
+    "evade_step": 90.0,
     "farm_threat": 140.0,
     "crate_threat": 150.0,
     "loot_threat": 60.0,
-    "boost_energy": 0.0,
+    "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
     "heal_hp": 0.95,            # start healing below this fraction
