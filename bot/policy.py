@@ -36,6 +36,11 @@ KNOBS = {
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
     "drop_early": 0,            # start walking to a supply drop before it lands
+    "early_evade_s": 0.0,       # treat every fresh contact as a reason to run this early
+    "dodge": 1,                 # side-step shells that are about to pass through us
+    "rush_s": 0.0,              # opening weapon rush (laser/lightning) until this time
+    "rush_dist": 170.0,         # only chase gear this far
+    "outnumber": 0,             # extra caution when more than one fresh hostile is visible
     "evade_sticky": 3.0,        # keep running this long after the trigger clears
     "trade_hp": 0.80,           # disengage when we are losing a duel...
     "trade_dur": 2.5,           # ...for at least this many seconds
@@ -135,6 +140,9 @@ class Policy:
         if not self.k.get("weapon_chase", 1):
             take_id, take_goal = None, None
 
+        # --- opening weapon rush
+        rush_goal = self._rush_step(obs, pos, t, threat_d)
+
         # --- supply drop
         drop_goal, drop_id = self._drop_step(obs, pos, hp_frac, threat_d, t, int(me.get("cubes") or 0))
 
@@ -160,6 +168,10 @@ class Policy:
             or (hp_frac < 0.5 and fresh and threat_d < 110.0)
             # a ghost that vanished behind cover 3 s ago is still worth backing away from
             or (ghost is not None and hp_frac < 0.5 and ghost[0] < 55.0)
+            # opening seconds: the whole house squad hunts us, so survival beats damage
+            or (t < k["early_evade_s"] and fresh and threat_d < k["evade_dist"])
+            # two barrels on us at once is not a duel, it is a crossfire
+            or (k["outnumber"] and len(fresh_hostiles) >= 2 and hp_frac < 0.80 and threat_d < 150.0)
         )
         if evade:
             self.evade_until = max(self.evade_until, t + float(k["evade_sticky"]))
@@ -194,6 +206,9 @@ class Policy:
             if threat is not None and fresh:
                 self.evade_from = (threat.x, threat.y)
             goal = self._evade_goal(pos, self.evade_from[0], self.evade_from[1], zone_center, zr)
+        elif rush_goal is not None:
+            mode = "RUSH"
+            goal = rush_goal
         elif drop_goal is not None:
             mode = "DROP"
             goal = drop_goal
@@ -274,10 +289,25 @@ class Policy:
                 aim = [me["aim"][0], 0.0]
 
         # --- taking a weapon / cube pickup we are standing on
+        if (
+            take_id is None
+            and getattr(self, "rush_target", None) is not None
+            and math.dist(pos[:2], self.rush_target[1:]) <= self.pickup_r - 0.3
+        ):
+            act["take"] = self.rush_target[0]
+
         if take_id is not None and math.dist(pos[:2], take_goal) <= self.pickup_r - 0.3:
             act["take"] = take_id
             self.take_id = take_id
             self.take_until = t + 1.0
+
+        if self.k.get("dodge", 1):
+            ex, ey, urg = self.combat.dodge_vector(obs, me)
+            if urg > 0.0:
+                move = [move[0] + ex * (1.8 * urg), move[1] + ey * (1.8 * urg)]
+                n = math.hypot(move[0], move[1])
+                if n > 1.0:
+                    move = [move[0] / n, move[1] / n]
 
         act["move"] = move
         act["aim"] = [float(aim[0]), float(aim[1])]
@@ -287,7 +317,7 @@ class Policy:
             and not self.combat.charging
             and (
                 (not in_zone)
-                or (mode in ("EVADE", "DROP", "LOOT") and dist_goal > 45.0)
+                or (mode in ("EVADE", "DROP", "LOOT", "RUSH") and dist_goal > 45.0)
                 or (mode == "ROTATE" and dist_goal > 70.0)
                 or (mode == "ZONE" and dist_goal > 30.0)
             )
@@ -397,6 +427,36 @@ class Policy:
         if threat_d < 35.0:
             return None, None
         return best["id"], (best["pos"][0], best["pos"][1])
+
+    def _rush_step(self, obs, pos, t, threat_d):
+        """Opening seconds: grab a laser or lightning before the hunters find us."""
+        self.rush_target = None
+        if t >= float(self.k.get("rush_s") or 0.0):
+            return None
+        me = obs.get("self") or {}
+        slots = me.get("weapons") or []
+        if len(slots) < 2 or slots[1] is not None:
+            return None
+        if threat_d < 55.0:
+            return None
+        best = None
+        best_s = -1e9
+        reach = float(self.k.get("rush_dist") or 0.0)
+        for p in obs.get("pickups") or ():
+            kind = p.get("kind")
+            if kind not in ("laser", "lightning"):
+                continue
+            d = math.dist(p["pos"][:2], pos[:2])
+            if d > reach:
+                continue
+            sc = KIND_VALUE.get(kind, 0.0) * 100.0 - d
+            if sc > best_s:
+                best_s = sc
+                best = p
+        if best is None:
+            return None
+        self.rush_target = (best["id"], best["pos"][0], best["pos"][1])
+        return (best["pos"][0], best["pos"][1])
 
     def _cube_step(self, obs, pos, hp_frac, threat_d):
         best = None
@@ -642,6 +702,7 @@ class Policy:
                 best_s = s
                 best_i = i
         return best_i
+
 
 
 

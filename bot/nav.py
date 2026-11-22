@@ -23,6 +23,15 @@ SQRT2 = math.sqrt(2.0)
 HEUR_W = 1.05              # slight greed: fewer expansions, a few percent longer paths
 MAX_LOOKAHEAD = 24         # smoothing: furthest cell tried in one straight leg
 
+# Cover steering: nudge the next waypoint at most this far sideways/backwards, only when the
+# detour stays under a few percent of the two-leg segment and the cover score improves.
+COVER_MAX_DETOUR = 0.15    # relative extra length allowed for one shifted waypoint
+COVER_MIN_GAIN = 0.0625    # at least half a blocked neighbour out of the eight
+COVER_OFFSETS = (          # (sideways m, forward m) around the planned waypoint
+    (2.0, 0.0), (-2.0, 0.0), (3.0, 0.0), (-3.0, 0.0),
+    (2.0, -1.6), (-2.0, -1.6), (0.0, -2.0),
+)
+
 
 class Navigator:
     def __init__(self, world, cfg=None, budget=1800):
@@ -40,6 +49,9 @@ class Navigator:
         self.last_expansions = 0
         self.last_truncated = False
         self.last_source = "none"
+        self.last_cover_shift = 0.0
+        self.last_cover = 0.0
+        self._cover_target = None
 
         # Scratch A* state on the border-padded walk grid (cell (i, j) -> (j+1)*stride + i+1).
         stride = getattr(world, "stride", 0)
@@ -375,22 +387,154 @@ class Navigator:
             self.goal = goal
             self.t_path = now
         px, py = pos[0], pos[1]
-        # drop waypoints we already stand on
+        # Drop waypoints we already stand on -- but only while the leg to the *next* one is
+        # verified too. Standing 2 m short of a corner waypoint and cutting straight to the
+        # waypoint after it is how the old steer could clip a wall corner.
+        popped = False
         while self.path and math.dist(self.path[0], (px, py)) < 2.2:
+            if len(self.path) > 1 and not self.w.path_clear(
+                    px, py, self.path[1][0], self.path[1][1]):
+                break
             self.path.pop(0)
+            popped = True
         if not self.path:
-            # no verified route: aim straight at the goal for one replan interval
-            dx = goal[0] - px
-            dy = goal[1] - py
-            d = math.hypot(dx, dy)
-            if d < 1e-6:
-                return (0.0, 0.0, 0.0)
-            self.path = [goal]
-            return (dx / d, dy / d, d)
+            return self._fallback_aim(pos, goal)
         tx, ty = self.path[0]
+        if popped and not self.w.path_clear(px, py, tx, ty):
+            # The mech is off the verified line (usually right after a dropped waypoint):
+            # reroute from where it actually is instead of steering through the corner.
+            self.path = self.plan(pos, goal)
+            self.t_path = now
+            while self.path and math.dist(self.path[0], (px, py)) < 2.2:
+                self.path.pop(0)
+            if not self.path:
+                return self._fallback_aim(pos, goal)
+            tx, ty = self.path[0]
+            if not self.w.path_clear(px, py, tx, ty):
+                return (0.0, 0.0, math.dist(goal, (px, py)))
         dx = tx - px
         dy = ty - py
         d = math.hypot(dx, dy)
         if d < 1e-6:
             return (0.0, 0.0, 0.0)
         return (dx / d, dy / d, math.dist(goal, (px, py)))
+
+    def _fallback_aim(self, pos, goal):
+        """No verified route: aim at the goal, but never trust more line than was checked.
+
+        If the whole line to the goal is clear it is used directly. Otherwise only a short
+        probed step is committed to ``self.path``; the next tick pops that probe and probes
+        again from wherever the mech actually is, so a guessed straight line can never walk
+        through a wall.
+        """
+        px, py = pos[0], pos[1]
+        dx = goal[0] - px
+        dy = goal[1] - py
+        d = math.hypot(dx, dy)
+        if d < 1e-6:
+            self.path = []
+            return (0.0, 0.0, 0.0)
+        ux = dx / d
+        uy = dy / d
+        if self.w.path_clear(px, py, goal[0], goal[1]):
+            self.path = [goal]
+            return (ux, uy, d)
+        step = min(2.0, d)
+        while step >= 0.4:
+            if self.w.path_clear(px, py, px + ux * step, py + uy * step):
+                self.path = [(px + ux * step, py + uy * step)]
+                return (ux, uy, d)
+            step *= 0.5
+        self.path = []
+        return (0.0, 0.0, d)
+
+    # ------------------------------------------------------------------ cover steering
+    def steer_cover(self, pos, goal, threat_pos, now, force=False):
+        """steer(), but shift the next waypoint a few metres toward nearby cover when cheap.
+
+        ``World.cover_quality`` scores how many of the eight neighbouring cells have their
+        sight line to a point blocked. A shifted waypoint is accepted only when it is walkable,
+        straight-line clear from both the mech and the waypoint after it, costs at most
+        ``COVER_MAX_DETOUR`` extra length, and improves that cover score by at least
+        ``COVER_MIN_GAIN``. Among equally covered candidates the one the threat cannot see
+        wins, then the shortest detour. The shift is chosen once per plan, never again for the
+        same waypoint, so the path cannot creep sideways tick after tick; the returned point
+        is always a verified walkable one.
+
+        The added cost is bounded: seven candidates, each two ``path_clear`` probes and one
+        ``cover_quality`` call (a few tens of microseconds), still far under the 50 ms tick.
+        """
+        self.last_cover_shift = 0.0
+        self.last_cover = 0.0
+        if goal is None:
+            return self.steer(pos, goal, now, force)
+        t_before = self.t_path
+        out = self.steer(pos, goal, now, force)
+        if out is None or threat_pos is None or not self.path:
+            return out
+        if self.t_path == t_before:
+            return out                        # not a replan tick: keep the chosen waypoint
+        if self.path[0] == self._cover_target:
+            return out                        # a reused suffix we already shifted once
+        w = self.w
+        px, py = pos[0], pos[1]
+        tx, ty = self.path[0]
+        if len(self.path) > 1:
+            ax, ay = self.path[1]
+        else:
+            ax, ay = goal[0], goal[1]
+        dx = tx - px
+        dy = ty - py
+        seg = math.hypot(dx, dy)
+        if seg < 0.5:
+            return out
+        ux = dx / seg
+        uy = dy / seg
+        lx = -uy                              # lateral axis of the travel direction
+        ly = ux
+        base_cost = seg + math.hypot(ax - tx, ay - ty)
+        base_cover = w.cover_quality(tx, ty)
+        limit = base_cost * (1.0 + COVER_MAX_DETOUR) + 0.25
+        best_cover = -1.0
+        ties = []                             # (cover, cost, cx, cy) at the best cover seen
+        for off_lat, off_fwd in COVER_OFFSETS:
+            cx = tx + lx * off_lat + ux * off_fwd
+            cy = ty + ly * off_lat + uy * off_fwd
+            if not w.inside(cx, cy) or not w.walkable(cx, cy):
+                continue
+            cost = math.hypot(cx - px, cy - py) + math.hypot(ax - cx, ay - cy)
+            if cost > limit:
+                continue
+            if not w.path_clear(px, py, cx, cy) or not w.path_clear(cx, cy, ax, ay):
+                continue
+            cover = w.cover_quality(cx, cy)
+            if cover < base_cover + COVER_MIN_GAIN:
+                continue
+            if cover > best_cover + 1e-9:
+                best_cover = cover
+                ties = [(cover, cost, cx, cy)]
+            elif cover > best_cover - 1e-9:
+                ties.append((cover, cost, cx, cy))
+        if not ties:
+            return out
+        if len(ties) == 1:
+            _cover, _cost, cx, cy = ties[0]
+        else:
+            hidden = [(cost, cx, cy) for _cover, cost, cx, cy in ties
+                      if not w.has_los(threat_pos[0], threat_pos[1], cx, cy)]
+            if hidden:
+                _cost, cx, cy = min(hidden)
+            else:
+                _cost, cx, cy = min((cost, cx, cy) for _cover, cost, cx, cy in ties)
+        if math.dist((cx, cy), (tx, ty)) < 0.4:
+            return out
+        self.path[0] = (cx, cy)
+        self._cover_target = (cx, cy)
+        self.last_cover = best_cover
+        self.last_cover_shift = math.dist((cx, cy), (tx, ty))
+        ddx = cx - px
+        ddy = cy - py
+        dd = math.hypot(ddx, ddy)
+        if dd < 1e-6:
+            return out
+        return (ddx / dd, ddy / dd, out[2])

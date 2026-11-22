@@ -50,13 +50,14 @@ def _dist2(ax, ay, bx, by):
 
 class Match:
     def __init__(self, bot, hello, seed, duration=None, no_fire=False, trace_every=20,
-                 collect_events=True, house_vision="pings"):
+                 collect_events=True, house_vision="pings", house_skill=None):
         self.bot = bot
         self.hello = hello
         self.cfg = hello["config"]
         if house_vision not in ("pings", "vision"):
             raise ValueError("house_vision must be 'pings' or 'vision', got %r" % (house_vision,))
         self.house_vision = house_vision
+        self.house_skill = dict(house_skill or {})
         # shared sight memory (used only in "vision" mode); pings mode keeps its 6 s leak
         self.house_shared_memory = 3.0
         self.seed = int(seed)
@@ -186,7 +187,7 @@ class Match:
                 if m.holding(kind) is None:
                     m.give_weapon(kind, 0.0)
             self.mechs.append(m)
-            ai = HouseAI(m, level, self.rng)
+            ai = HouseAI(m, level, self.rng, self.house_skill)
             ai.last_pos = (m.pos[0], m.pos[1])
             self.house_ais.append(ai)
 
@@ -1402,6 +1403,7 @@ class Match:
             "house_sight_max": int(self.house_sight_max),
             "house_sight_ever": len(self.house_sight_ids),
             "house_pings": int(self.house_ping_count),
+            "house_skill": dict(self.house_skill),
             "house_known_frac": round(
                 self.house_known_samples / self.house_sight_samples, 3
             ) if self.house_sight_samples else 0.0,

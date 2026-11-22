@@ -415,6 +415,48 @@ class World:
             j = self.ny - 1
         return self.sight[j * self.nx + i]
 
+    def cover_quality(self, x, y):
+        """0..1: fraction of the 8 surrounding 2 m cells whose sight line to (x, y) is blocked.
+
+        Uses only the baked ``sight`` grid and walks short grid lines with no per-call
+        allocation, so it is cheap enough for a steering decision every tick. Out-of-map
+        neighbours count as blocked (the arena border is solid) and the point's own cell is
+        never sampled, so standing inside a sight blocker does not by itself score as cover.
+        """
+        nx, ny = self.nx, self.ny
+        sight = self.sight
+        cell = self.cell
+        minx, miny = self.min_x, self.min_y
+        ci, cj = self.cell_of(x, y)
+        blocked = 0
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                if di == 0 and dj == 0:
+                    continue
+                i = ci + di
+                j = cj + dj
+                if i < 0 or j < 0 or i >= nx or j >= ny:
+                    blocked += 1             # solid arena border: it blocks sight too
+                    continue
+                if sight[j * nx + i]:
+                    blocked += 1             # the neighbour cell itself is a sight blocker
+                    continue
+                sx = minx + (i + 0.5) * cell
+                sy = miny + (j + 0.5) * cell
+                dx = x - sx
+                dy = y - sy
+                steps = int(math.hypot(dx, dy) / (cell * 0.5)) + 1
+                s = 1
+                while s < steps:             # endpoint cell excluded: the target is not cover
+                    t = s / steps
+                    ii = int((sx + dx * t - minx) / cell)
+                    jj = int((sy + dy * t - miny) / cell)
+                    if 0 <= ii < nx and 0 <= jj < ny and sight[jj * nx + ii]:
+                        blocked += 1
+                        break
+                    s += 1
+        return blocked * 0.125
+
     def has_los(self, x0, y0, x1, y1):
         """2D line of sight through the sight grid (buildings and tree trunks)."""
         dx = x1 - x0
@@ -448,7 +490,7 @@ class World:
         dist = math.hypot(dx, dy)
         if dist < 0.5:
             return True
-        steps = int(dist / (CELL * 0.5)) + 1
+        steps = int(dist / (CELL * 0.25)) + 1
         sx = dx / steps
         sy = dy / steps
         x = x0

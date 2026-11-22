@@ -18,13 +18,11 @@ import time
 
 CONFIGS = [
     ("base", {}),
-    ("dropEarly", {"drop_early": 1}),
-    ("heal250", {"heal_safe_dist": 250.0, "heal_hp": 0.95}),
-    ("evade55", {"evade_hp_frac": 0.55, "evade_dist": 180.0}),
-    ("combo", {"drop_early": 1, "heal_safe_dist": 250.0, "heal_hp": 0.95, "evade_hp_frac": 0.55, "evade_dist": 180.0}),
-    ("dropHeal", {"drop_early": 1, "heal_safe_dist": 250.0, "heal_hp": 0.95}),
-    ("dropCube", {"drop_early": 1, "cube_chase": 1, "target_weak": 1}),
-    ("aggro", {"engage_dist": 240.0, "farm_threat": 170.0}),
+    ("rush90", {"rush_s": 90.0}),
+    ("rush150", {"rush_s": 150.0}),
+    ("rush90d240", {"rush_s": 90.0, "rush_dist": 240.0}),
+    ("pacifist", {"engage_dist": 0.01, "evade_hp_frac": 1.0, "evade_dist": 220.0}),
+    ("pacifistHeal", {"engage_dist": 0.01, "evade_hp_frac": 1.0, "evade_dist": 220.0, "heal_hp": 1.0, "heal_safe_dist": 120.0}),
 ]
 
 
@@ -128,6 +126,8 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
 
 
 

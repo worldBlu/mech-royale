@@ -31,10 +31,11 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from tools.sim import kitcfg, loader  # noqa: E402
-from tools.sim.house import LEVEL_COUNTS  # noqa: E402
+from tools.sim.house import DEFAULT_SKILL, LEVEL_COUNTS  # noqa: E402
 from tools.sim.match import Match  # noqa: E402
 
 VARIANTS = ("", "no-fire", "no-boost", "no-loot", "no-farm")
+HOUSE_SKILL_KEYS = tuple(sorted(DEFAULT_SKILL))
 
 
 def _parse_literal(text):
@@ -68,9 +69,9 @@ def _patch_variant(bot, variant):
     raise ValueError("unknown variant: %s" % variant)
 
 
-def _make_bot_factory(kind):
+def _make_bot_factory(kind, bot_dir=None):
     if kind == "main":
-        Bot, mod = loader.load_main(cache_world=True)
+        Bot, mod = loader.load_main(cache_world=True, bot_dir=bot_dir or loader.BOT_DIR)
         return lambda hello: Bot(hello)
     if kind == "example":
         return loader.make_example_bot_factory()
@@ -97,11 +98,18 @@ def main(argv=None):
     ap.add_argument("--matches", type=int, default=8, help="number of matches (default 8)")
     ap.add_argument("--seed", type=int, default=1, help="base seed (default 1)")
     ap.add_argument("--bot", choices=("main", "example"), default="main")
+    ap.add_argument("--bot-dir", default=None,
+                    help="load bot/main.py from this directory instead of ./bot "
+                         "(e.g. an exported older commit under .reports/)")
     ap.add_argument("--house-vision", choices=("pings", "vision"), default="pings",
                     help="house sensing model: 'pings' (noisy shared hunt track, legacy) or "
                          "'vision' (only shared line-of-sight + 3 s team memory)")
     ap.add_argument("--knob", action="append", default=[],
                     help="config override, dotted path: vision.range=120")
+    ap.add_argument("--house-knob", action="append", default=[],
+                    metavar="KEY=VALUE",
+                    help="house-bot skill override applied to every level (%s)"
+                         % ", ".join(HOUSE_SKILL_KEYS))
     ap.add_argument("--variant", choices=VARIANTS, default="",
                     help="deliberate A/B policy variant")
     ap.add_argument("--quick", action="store_true",
@@ -142,7 +150,21 @@ def main(argv=None):
         overrides.append((path, value))
         kitcfg.set_path(base_cfg, path, value)
 
-    factory = _make_bot_factory(args.bot)
+    house_skill = {}
+    for raw in args.house_knob:
+        if "=" not in raw:
+            ap.error("--house-knob expects key=value, got %r" % raw)
+        key, val = raw.split("=", 1)
+        key = key.strip()
+        if key not in HOUSE_SKILL_KEYS:
+            ap.error("unknown house skill knob %r (choose from: %s)"
+                     % (key, ", ".join(HOUSE_SKILL_KEYS)))
+        try:
+            house_skill[key] = float(val)
+        except ValueError:
+            ap.error("--house-knob %s expects a number, got %r" % (key, val))
+
+    factory = _make_bot_factory(args.bot, args.bot_dir)
     t_start = time.time()
     results = []
     dumps = []
@@ -159,6 +181,8 @@ def main(argv=None):
         print("house bots: easy %d / medium %d / hard %d / expert %d"
               % LEVEL_COUNTS)
         print("house sensing: %s" % args.house_vision)
+        if house_skill:
+            print("house skill: " + ", ".join("%s=%g" % kv for kv in sorted(house_skill.items())))
 
     for i in range(matches):
         seed = args.seed + i * 10007
@@ -178,6 +202,7 @@ def main(argv=None):
             no_fire=(args.variant == "no-fire"),
             trace_every=40 if args.quick else 20,
             house_vision=args.house_vision,
+            house_skill=house_skill,
         )
         try:
             result = match.run()
@@ -223,6 +248,7 @@ def main(argv=None):
         "seed": args.seed,
         "variant": args.variant,
         "house_vision": args.house_vision,
+        "house_skill": house_skill,
         "knobs": {p: v for p, v in overrides},
         "duration_cap": duration,
         "summary": summary,

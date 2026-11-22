@@ -16,32 +16,58 @@ import math
 from .combat import ang_diff
 
 # level: 1 easy, 2 medium, 3 hard, 4 expert
+#
+# Skill knobs (all can be overridden per run with ``--house-knob key=value``; see
+# ``tools/eval.py``).  Defaults were calibrated so the kit example bot sits near its real
+# ladder score and the current bot lands near its real 48-match practice score:
+#   aim_sigma_deg   gaussian aim error added to every shot (degrees, 1-sigma)
+#   fire_tol_deg    only pull the trigger when the torso is within this angle of the aim
+#                   solution (fire discipline; tighter = fewer, better shots)
+#   burst_s         gun burst length before a forced pause (continuous fire if very large)
+#   burst_pause_s   pause after a gun burst (burst discipline)
+#   engage_m        max distance at which the house will fire at the player
+#   pref_m          preferred orbit distance (smaller = houses close in harder)
+#   react           delay between seeing the player and starting to shoot
+#   strafe          seconds between strafe-direction flips
+#   secondary       chance of starting with a looted secondary weapon
+#   converge        movement speed factor while chasing the shared player track
 LEVELS = {
     1: {
-        "err": 0.105, "engage": 120.0, "pref": 95.0, "tol": 0.16,
-        "secondary": 0.15, "react": 1.1, "strafe": 2.2,
+        "aim_sigma_deg": 2.6, "fire_tol_deg": 4.0, "burst_s": 99.0, "burst_pause_s": 0.0,
+        "engage_m": 130.0, "pref_m": 85.0, "secondary": 0.15, "react": 0.9, "strafe": 2.2,
+        "converge": 1.0,
     },
     2: {
-        "err": 0.062, "engage": 160.0, "pref": 112.0, "tol": 0.12,
-        "secondary": 0.35, "react": 0.7, "strafe": 1.8,
+        "aim_sigma_deg": 1.6, "fire_tol_deg": 2.8, "burst_s": 99.0, "burst_pause_s": 0.0,
+        "engage_m": 165.0, "pref_m": 95.0, "secondary": 0.35, "react": 0.55, "strafe": 1.8,
+        "converge": 1.0,
     },
     3: {
-        "err": 0.034, "engage": 205.0, "pref": 128.0, "tol": 0.085,
-        "secondary": 0.60, "react": 0.45, "strafe": 1.5,
+        "aim_sigma_deg": 0.9, "fire_tol_deg": 1.8, "burst_s": 99.0, "burst_pause_s": 0.0,
+        "engage_m": 195.0, "pref_m": 105.0, "secondary": 0.60, "react": 0.3, "strafe": 1.5,
+        "converge": 1.0,
     },
     4: {
-        "err": 0.017, "engage": 225.0, "pref": 140.0, "tol": 0.06,
-        "secondary": 0.85, "react": 0.25, "strafe": 1.2,
+        "aim_sigma_deg": 0.5, "fire_tol_deg": 1.1, "burst_s": 99.0, "burst_pause_s": 0.0,
+        "engage_m": 215.0, "pref_m": 115.0, "secondary": 0.85, "react": 0.15, "strafe": 1.2,
+        "converge": 1.0,
     },
 }
 LEVEL_COUNTS = (4, 4, 4, 3)  # easy, medium, hard, expert
+DEFAULT_SKILL = {
+    "aim_sigma_deg": 6.0, "fire_tol_deg": 9.2, "burst_s": 99.0, "burst_pause_s": 0.0,
+    "engage_m": 120.0, "pref_m": 95.0, "secondary": 0.15, "react": 1.1, "strafe": 2.2,
+    "converge": 1.0,
+}
 
 
 class HouseAI:
-    def __init__(self, mech, level, rng):
+    def __init__(self, mech, level, rng, skill=None):
         self.mech = mech
         self.level = level
-        self.cfg = LEVELS[level]
+        self.cfg = dict(LEVELS[level])
+        if skill:
+            self.cfg.update(skill)
         self.rng = rng
         self.last_pos = (mech.pos[0], mech.pos[1])
         self.stuck_t = 0.0
@@ -55,18 +81,24 @@ class HouseAI:
         self.seen_since = -1e9
         self.was_visible = False
         self.loot_want = None
+        self.burst_start = None
+        self.burst_pause_until = -1.0
+        self.burst_slot = None
+        # angles are authored in degrees and converted once (clearer knobs, less unit confusion)
+        self.err = math.radians(float(self.cfg["aim_sigma_deg"]))
+        self.tol = math.radians(float(self.cfg["fire_tol_deg"]))
 
     # --------------------------------------------------------------- helpers
-    def _set_move(self, mech, dx, dy):
+    def _set_move(self, mech, dx, dy, speed=1.0):
         d = math.hypot(dx, dy)
         if d < 0.5:
             mech.cmd_move[0] = 0.0
             mech.cmd_move[1] = 0.0
         else:
-            mech.cmd_move[0] = dx / d
-            mech.cmd_move[1] = dy / d
+            mech.cmd_move[0] = dx / d * speed
+            mech.cmd_move[1] = dy / d * speed
 
-    def _toward(self, mech, tx, ty, stop=2.0):
+    def _toward(self, mech, tx, ty, stop=2.0, speed=1.0):
         dx = tx - mech.pos[0]
         dy = ty - mech.pos[1]
         d = math.hypot(dx, dy)
@@ -74,7 +106,7 @@ class HouseAI:
             mech.cmd_move[0] = 0.0
             mech.cmd_move[1] = 0.0
         else:
-            self._set_move(mech, dx, dy)
+            self._set_move(mech, dx, dy, speed)
 
     def _zone_goal(self, match):
         z = match.zone
@@ -126,7 +158,7 @@ class HouseAI:
                                              best.pos[2] + 1.75, "laser", target=best)
             mech.cmd_aim[0] = yaw
             mech.cmd_aim[1] = pitch
-            if abs(ang_diff(mech.aim[0], yaw)) <= self.cfg["tol"]:
+            if abs(ang_diff(mech.aim[0], yaw)) <= self.tol:
                 w.charge = float(w.stats["charge"])
                 match.combat.fire_laser(mech, slot, error=0.0)
                 return True
@@ -135,8 +167,8 @@ class HouseAI:
                                          best.pos[2] + 1.75, kind, target=best)
         mech.cmd_aim[0] = yaw
         mech.cmd_aim[1] = pitch
-        if abs(ang_diff(mech.aim[0], yaw)) < self.cfg["tol"] and abs(mech.aim[1] - pitch) < self.cfg["tol"] * 2:
-            match.combat.fire(mech, slot, self.cfg["err"])
+        if abs(ang_diff(mech.aim[0], yaw)) < self.tol and abs(mech.aim[1] - pitch) < self.tol * 2:
+            match.combat.fire(mech, slot, self.err)
             return True
         return False
 
@@ -163,18 +195,21 @@ class HouseAI:
         dzone = match.zone.dist(mech.pos[0], mech.pos[1])
         in_zone = match.zone.in_zone(mech.pos[0], mech.pos[1], margin=-2.0)
         edge_risk = match.zone.radius > 30.0 and dzone > match.zone.radius - 12.0
+        boost = False
         if not in_zone or edge_risk:
             gx, gy = self._zone_goal(match)
-            self._toward(mech, gx, gy, 2.0)
+            self._toward(mech, gx, gy, 2.0, cfg["converge"])
         elif known is not None:
             dx = known[0] - mech.pos[0]
             dy = known[1] - mech.pos[1]
             dist = math.hypot(dx, dy)
-            pref = cfg["pref"]
+            pref = cfg["pref_m"]
             if dist > pref + 30.0:
-                self._toward(mech, known[0], known[1], 5.0)
+                self._toward(mech, known[0], known[1], 5.0, cfg["converge"])
+                # converge faster: houses boost towards a shared sighting when far away
+                boost = bool(cfg.get("converge_boost", 1.0)) and dist > 60.0 and mech.energy > 25.0
             elif dist < pref - 32.0:
-                self._set_move(mech, -dx, -dy)
+                self._set_move(mech, -dx, -dy, cfg["converge"])
             else:
                 # strafe orbit
                 if t - self.strafe_t > cfg["strafe"]:
@@ -184,7 +219,8 @@ class HouseAI:
                 self._set_move(mech, -dy * sd, dx * sd)
         else:
             gx, gy = self._zone_goal(match)
-            self._toward(mech, gx, gy, 3.0)
+            self._toward(mech, gx, gy, 3.0, cfg["converge"])
+        mech.cmd_boost = boost
 
         # ---------- stuck detection: take a random detour for a moment
         moved = math.dist((mech.pos[0], mech.pos[1]), self.last_pos)
@@ -214,7 +250,7 @@ class HouseAI:
         tz = player.pos[2] + player.height * 0.5
         dist = math.hypot(tx - mech.pos[0], ty - mech.pos[1])
         los = match.line_clear(mech.pos, (tx, ty, tz))
-        if dist > cfg["engage"]:
+        if dist > cfg["engage_m"]:
             self._defend_against_npc(match, t)
             return
         if t - self.seen_since < cfg["react"]:
@@ -230,11 +266,25 @@ class HouseAI:
         yaw, pitch = match.combat.aim_at(mech, tx, ty, tz, kind, target=player)
         mech.cmd_aim[0] = yaw
         mech.cmd_aim[1] = pitch
-        if abs(ang_diff(mech.aim[0], yaw)) > cfg["tol"]:
+        if abs(ang_diff(mech.aim[0], yaw)) > self.tol:
             return
-        if abs(mech.aim[1] - pitch) > cfg["tol"] * 1.5:
+        if abs(mech.aim[1] - pitch) > self.tol * 1.5:
             return
-        match.combat.fire(mech, slot, cfg["err"])
+        if kind == "gun":
+            # burst discipline: fire a burst, then pause; only meaningful when burst_s is
+            # finite (the calibrated default is continuous fire)
+            if t < self.burst_pause_until:
+                return
+            if self.burst_slot != slot or self.burst_start is None:
+                self.burst_slot = slot
+                self.burst_start = t
+            elif cfg["burst_pause_s"] > 0.0 and t - self.burst_start >= cfg["burst_s"]:
+                self.burst_pause_until = t + cfg["burst_pause_s"]
+                self.burst_start = None
+                return
+        else:
+            self.burst_start = None
+        match.combat.fire(mech, slot, self.err)
 
     def _drive_laser(self, match, slot, tx, ty, tz, dist):
         mech = self.mech
@@ -247,7 +297,7 @@ class HouseAI:
         if w.cooldown > 0 or match.t < w.ready_at or match.t < w.short_until:
             self._abort_charge(mech)
             return
-        if abs(ang_diff(mech.aim[0], yaw)) > self.cfg["tol"]:
+        if abs(ang_diff(mech.aim[0], yaw)) > self.tol:
             return
         if self.charge_slot is None:
             self.charge_slot = slot
