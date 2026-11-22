@@ -48,7 +48,7 @@ KNOBS = {
     "weapon_r": 90.0,          # grab a spare weapon from this far away (it doubles our damage)
     "finish_hp": 0.90,           # close in and finish targets below this hp fraction
     "finish_d": 35.0,           # preferred range while finishing
-    "chase": 0,                 # keep pushing a wounded target that slipped out of sight
+    "chase": 1,                 # keep pushing a wounded target that slipped out of sight
     "camp": 0,                  # hold a low-exposure spot inside the next zone
     "camp_frac": 0.60,          # stay inside this fraction of the next radius
     "camp_leave": 10.0,         # seconds of slack before the next shrink to relocate
