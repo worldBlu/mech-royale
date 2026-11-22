@@ -21,7 +21,7 @@ KNOBS = {
     "engage_our_hp": 0.72,
     "evade_hp_frac": 0.45,      # running away when a fresh hostile is close
     "evade_dist": 180.0,
-    "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
+    "evade_aimed_hp": 0.55,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
     "farm_threat": 260.0,
