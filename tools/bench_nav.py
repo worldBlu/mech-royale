@@ -299,7 +299,7 @@ def _isolated_walkable(world):
             k = row + i
             if walk[k]:
                 continue
-            if not (walk[k - 1] or walk[k + 1] or walk[k - nx] or walk[k + nx]):
+            if walk[k - 1] and walk[k + 1] and walk[k - nx] and walk[k + nx]:
                 return (i, j)
     return None
 
@@ -374,20 +374,29 @@ def run_units(world, nav, rng):
         if not ok:
             problems.append("sealed-start plan at (%d,%d) did not report unreachable" % (i, j))
 
-    # 3. narrow-corridor smoothing: the stub only allows one-cell legs, so no shortcut can be
-    #    taken; _smooth must still return clear legs all the way to the last point.
-    class _AdjacentOnly:
+    # 3. narrow-corridor smoothing: a zigzag corridor where only consecutive points are mutually
+    #    visible (the stub only allows those pairs), and the mech starts off the line. No shortcut
+    #    can be taken, so _smooth must fall back to advancing one cell at a time instead of giving
+    #    up or repeating points; every returned leg must still be visible.
+    pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 2.0)]
+    allowed = set()
+    for k in range(len(pts) - 1):
+        allowed.add((pts[k], pts[k + 1]))
+        allowed.add((pts[k + 1], pts[k]))
+
+    class _CorridorOnly:
         def path_clear(self, x0, y0, x1, y1):
-            return (x1 - x0) ** 2 + (y1 - y0) ** 2 <= 1.0001
+            a = (x0, y0)
+            b = (x1, y1)
+            return a == b or (a, b) in allowed
 
     stub = Navigator.__new__(Navigator)
-    stub.w = _AdjacentOnly()
-    pts = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 2.0)]
-    out = stub._smooth(list(pts), pts[0], pts[-1])
-    legs = all((out[k + 1][0] - out[k][0]) ** 2 + (out[k + 1][1] - out[k][1]) ** 2 <= 1.0001
+    stub.w = _CorridorOnly()
+    out = stub._smooth(list(pts), (0.1, -0.1), pts[-1])
+    legs = all(((out[k], out[k + 1]) in allowed or out[k] == out[k + 1])
                for k in range(len(out) - 1))
-    ok = (len(out) >= len(pts) - 1 and legs and out[-1] == pts[-1])
-    lines.append("units     narrow corridor: %d waypoints for a %d-point zigzag, legs clear: %s -> %s"
+    ok = len(out) == len(pts) and legs and out[0] == pts[0] and out[-1] == pts[-1]
+    lines.append("units     narrow corridor: %d/%d zigzag points kept, legs visible: %s -> %s"
                  % (len(out), len(pts), "yes" if legs else "no", "OK" if ok else "FAIL"))
     if not ok:
         problems.append("narrow-corridor smoothing lost a clear leg")
@@ -431,6 +440,8 @@ def run_units(world, nav, rng):
         problems.append("path_clear disagrees with its own sub-segments")
     return lines, problems
 
+
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--map", default=DEFAULT_MAP)
     ap.add_argument("--n", type=int, default=200)

@@ -40,8 +40,9 @@ KNOBS = {
     "dodge": 1,                 # side-step shells that are about to pass through us
     "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
     "rush_dist": 170.0,         # only chase gear this far
-    "finish_hp": 0.60,           # close in and finish targets below this hp fraction
-    "finish_d": 35.0,           # preferred range while finishing
+    "finish_hp": 0.75,           # close in and finish targets below this hp fraction
+    "finish_d": 30.0,           # preferred range while finishing
+    "chase": 1,                 # keep pushing a wounded target that slipped out of sight
     "camp": 0,                  # hold a low-exposure spot inside the next zone
     "camp_frac": 0.75,          # stay inside this fraction of the next radius
     "camp_leave": 12.0,         # seconds of slack before the next shrink to relocate
@@ -50,7 +51,7 @@ KNOBS = {
     "trade_hp": 0.80,           # disengage when we are losing a duel...
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
-    "standoff": {"gun": 120.0, "laser": 160.0, "mortar": 150.0, "lightning": 28.0},
+    "standoff": {"gun": 100.0, "laser": 150.0, "mortar": 150.0, "lightning": 28.0},
 }
 
 
@@ -121,6 +122,21 @@ class Policy:
         fresh_hostiles = [(d, tr) for d, tr in hostiles if (t - tr.seen) < 0.5]
         threat = fresh_hostiles[0][1] if fresh_hostiles else None
         threat_d = fresh_hostiles[0][0] if fresh_hostiles else 1e9
+        chase = None
+        _fin = float(self.k.get("finish_hp") or 0.0)
+        if self.k.get("chase") and _fin > 0.0:
+            _best = None
+            _bd = 1e9
+            for _d, _tr in hostiles:
+                _hp = float(getattr(_tr, "hp", 0.0) or 0.0)
+                if _hp <= 0.0 or _hp / 1400.0 >= _fin:
+                    continue
+                if (t - _tr.seen) > 6.0 or _d > 220.0:
+                    continue
+                if _d < _bd:
+                    _bd = _d
+                    _best = _tr
+            chase = _best
         ghost = None
         if hostiles and (t - hostiles[0][1].seen) >= 0.5:
             ghost = hostiles[0]
@@ -238,6 +254,14 @@ class Policy:
         elif threat is not None and fresh and threat_d < k["engage_dist"] and fight_ok:
             mode = "FIGHT"
             goal = self._fight_goal(pos, threat, threat_d, t)
+        elif (
+            chase is not None
+            and threat is None
+            and hp_frac > 0.55
+            and self.k.get("chase")
+        ):
+            mode = "CHASE"
+            goal = (chase.x, chase.y)
         elif npc_tr is not None:
             mode = "FARM"
             goal = self._farm_goal(pos, npc_tr, npc_d)
@@ -328,7 +352,7 @@ class Policy:
             and not self.combat.charging
             and (
                 (not in_zone)
-                or (mode in ("EVADE", "DROP", "LOOT", "RUSH") and dist_goal > 45.0)
+                or (mode in ("EVADE", "DROP", "LOOT", "RUSH", "CHASE") and dist_goal > 45.0)
                 or (mode == "ROTATE" and dist_goal > 70.0)
                 or (mode == "ZONE" and dist_goal > 30.0)
             )
@@ -516,7 +540,8 @@ class Policy:
             d = math.dist(p["pos"][:2], pos[:2])
             if d > reach:
                 continue
-            sc = KIND_VALUE.get(kind, 0.0) * 100.0 - d
+            _rush_val = {"lightning": 4.0, "laser": 3.0}
+            sc = _rush_val.get(kind, 0.0) * 100.0 - d
             if sc > best_s:
                 best_s = sc
                 best = p
