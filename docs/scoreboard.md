@@ -55,15 +55,27 @@ The organisers rescored each team's picked builders-3 entry onto builders-4 auto
 | 28 | `9dcfebc` | 11-22 05:05 | 3.24 (BB-0A098A13) | weave at every range (jink distance 420 m) - worse |
 | 29 | `581feef` | 11-22 05:10 | 3.30 (BB-23C3E683) | skip the first 45 s of fighting - worse |
 | 30 | `4e11b23` | 11-22 05:20 | 3.51 (BB-7B508BBE) | farm drones/crates at any threat distance (400 m) - same as 260 m |
-| 31 | `4e15e32` | 11-22 05:30 | **3.59 (BB-476D95C9) - best, final entry** | fight at 210-240 m |
+| 31 | `4e15e32` | 11-22 05:30 | 3.59 (BB-476D95C9) | fight at 210-240 m |
 | 32 | `6da1d04` | 11-22 05:44 | 3.45 (BB-DD1974F3) | 220-260 m - past the optimum, too many shots miss |
-| 33 | `ef1f573` | 11-22 05:58 | pending (BB-DDFB6989) | heal only when the nearest seen enemy is 320 m away |
+| 33 | `ef1f573` | 11-22 05:58 | 3.51 (BB-DDFB6989) | heal only when the nearest seen enemy is 320 m away |
+| 34 | `7b86db6` | 11-22 06:05 | 3.34 (BB-C99A9766) | finish wounded from 55 m instead of diving to 35 m |
+| 35 | `ab57da8` | 11-22 06:11 | 3.48 (BB-CC802C42) | detour up to 200 m for a fallen weapon |
+| 36 | `78576b4` | 11-22 06:17 | **3.83 (BB-58FCE83, confirmed by duplicate BB-9BB443F6)** | weave from 320 m out, fight at 210-240 m - **best, final entry** |
+| 37 | `806392d` | 11-22 06:26 | 3.27 (BB-15D0B5A) | wider weave amplitude (0.62) at the same trigger |
+| 38 | `eacb9af` | 11-22 06:31 | 3.33 (BB-B928A57F) | faster weave frequency (1.35 Hz) |
 
 Rejected: BB-7C82F652 - `9d1fa5b` submitted before it was pushed ("commit is not in that repository").
-Rejections still consume one of the hour's submissions.
+Rejections still consume one of the hour's submissions. The site also renders stale scores for a few
+seconds-to-minutes after a submission lands (we saw `BB-58FCE83` show 3.03 and 3.83 in different renders);
+re-submitting identical code is free of ambiguity because it inherits the stored score ("The same code as
+BB-50FCE83, so it keeps that score") - that is how 3.83 was confirmed.
 
-The fight-distance optimum is sharp: 120 m -> 3.36, 190 m -> 3.50, **210 m -> 3.59**, 220 m -> 3.45.
+Fight-distance optimum is sharp: 120 m -> 3.36, 190 m -> 3.50, 210 m -> 3.59, 220 m -> 3.45.
 At 240 m+ the laser is the only weapon that reaches and its 1.65 s cooldown cannot carry a duel.
+
+Weave (lateral sinusoid while moving, only near a fresh enemy) is the single biggest late gain:
+off -> 3.59, trigger at 260 m -> 3.59, **trigger at 320 m -> 3.83**, amplitude 0.62 -> 3.27,
+frequency 1.35 Hz -> 3.33, always-on (420 m) -> 3.24.
 
 ## Lessons
 
