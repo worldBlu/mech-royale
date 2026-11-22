@@ -47,10 +47,10 @@ KNOBS = {
     "dodge": 1,                 # side-step shells that are about to pass through us
     "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
     "rush_dist": 170.0,
-    "weapon_r": 150.0,          # weapons worth a detour even while a fight is near
+    "weapon_r": 200.0,          # weapons worth a detour even while a fight is near
     "weapon_threat": 25.0,      # never turn our back on a hostile this close to grab one         # only chase gear this far
     "finish_hp": 0.90,           # close in and finish targets below this hp fraction
-    "finish_d": 55.0,           # preferred range while finishing
+    "finish_d": 35.0,           # preferred range while finishing
     "camp": 0,                  # hold a low-exposure spot inside the next zone
     "camp_frac": 0.75,          # stay inside this fraction of the next radius
     "camp_leave": 12.0,         # seconds of slack before the next shrink to relocate
