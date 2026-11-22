@@ -69,7 +69,7 @@ PRESETS = {
     "calibrated": {"level": {}, "sense": {"shared_memory": 3.0}},
     "harsh": {
         "level": {
-            "aim_sigma_scale": 0.64,
+            "aim_sigma_scale": 0.55,
             "fire_tol_scale": 0.75,
             "react_scale": 0.40,
             "engage_add": 20.0,
@@ -77,8 +77,9 @@ PRESETS = {
             "close_when_blind": 1,
             "blind_mortar": 1,
             "converge_boost_energy": 6.0,
+            "secondary_scale": 2.00,
         },
-        "sense": {"shared_memory": 20.0, "ping_interval": 1.5, "ping_noise": 8.0},
+        "sense": {"shared_memory": 25.0, "ping_interval": 1.0, "ping_noise": 5.0},
     },
 }
 

@@ -19,8 +19,8 @@ KNOBS = {
     "engage_hp_frac": 0.30,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 0.18,      # running away when a fresh hostile is close
-    "evade_dist": 100.0,
+    "evade_hp_frac": 0.30,      # running away when a fresh hostile is close
+    "evade_dist": 120.0,
     "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
@@ -30,16 +30,18 @@ KNOBS = {
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 0.75,            # start healing below this fraction
-    "heal_exit": 0.90,          # stop at this fraction
-    "heal_safe_dist": 180.0,    # only heal when the nearest fresh hostile is farther
+    "heal_hp": 0.95,            # start healing below this fraction
+    "heal_exit": 0.97,          # stop at this fraction
+    "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
     "drop_early": 0,            # start walking to a supply drop before it lands
     "early_evade_s": 0.0,       # treat every fresh contact as a reason to run this early
     "dodge": 1,                 # side-step shells that are about to pass through us
     "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
-    "rush_dist": 170.0,         # only chase gear this far
+    "rush_dist": 170.0,
+    "weapon_r": 150.0,          # weapons worth a detour even while a fight is near
+    "weapon_threat": 25.0,      # never turn our back on a hostile this close to grab one         # only chase gear this far
     "finish_hp": 0.90,           # close in and finish targets below this hp fraction
     "finish_d": 35.0,           # preferred range while finishing
     "camp": 0,                  # hold a low-exposure spot inside the next zone
@@ -425,7 +427,7 @@ class Policy:
             if kind is None or kind == "gun":
                 continue
             d = math.dist(p["pos"][:2], pos[:2])
-            if d > 90.0:
+            if d > float(self.k.get("weapon_r") or 150.0):
                 continue
             s = KIND_VALUE.get(kind, 0.0) * 100.0 - d
             if kind == "mortar":
@@ -435,7 +437,7 @@ class Policy:
                 best = p
         if best is None:
             return None, None
-        if threat_d < 35.0:
+        if threat_d < float(self.k.get("weapon_threat") or 25.0):
             return None, None
         return best["id"], (best["pos"][0], best["pos"][1])
 
