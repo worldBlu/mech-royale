@@ -24,8 +24,8 @@ KNOBS = {
     "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
-    "farm_threat": 400.0,
-    "crate_threat": 400.0,
+    "farm_threat": 260.0,
+    "crate_threat": 260.0,
     "loot_threat": 60.0,
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
@@ -59,7 +59,7 @@ KNOBS = {
     "trade_hp": 0.80,           # disengage when we are losing a duel...
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
-    "standoff": {"gun": 190.0, "laser": 220.0, "mortar": 150.0, "lightning": 28.0},
+    "standoff": {"gun": 210.0, "laser": 240.0, "mortar": 150.0, "lightning": 28.0},
 }
 
 
