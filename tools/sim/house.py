@@ -33,22 +33,22 @@ from .combat import ang_diff
 #   converge        movement speed factor while chasing the shared player track
 LEVELS = {
     1: {
-        "aim_sigma_deg": 2.6, "fire_tol_deg": 4.0, "burst_s": 99.0, "burst_pause_s": 0.0,
+        "aim_sigma_deg": 4.42, "fire_tol_deg": 4.0, "burst_s": 99.0, "burst_pause_s": 0.0,
         "engage_m": 130.0, "pref_m": 85.0, "secondary": 0.15, "react": 0.9, "strafe": 2.2,
         "converge": 1.0,
     },
     2: {
-        "aim_sigma_deg": 1.6, "fire_tol_deg": 2.8, "burst_s": 99.0, "burst_pause_s": 0.0,
+        "aim_sigma_deg": 2.72, "fire_tol_deg": 2.8, "burst_s": 99.0, "burst_pause_s": 0.0,
         "engage_m": 165.0, "pref_m": 95.0, "secondary": 0.35, "react": 0.55, "strafe": 1.8,
         "converge": 1.0,
     },
     3: {
-        "aim_sigma_deg": 0.9, "fire_tol_deg": 1.8, "burst_s": 99.0, "burst_pause_s": 0.0,
+        "aim_sigma_deg": 1.53, "fire_tol_deg": 1.8, "burst_s": 99.0, "burst_pause_s": 0.0,
         "engage_m": 195.0, "pref_m": 105.0, "secondary": 0.60, "react": 0.3, "strafe": 1.5,
         "converge": 1.0,
     },
     4: {
-        "aim_sigma_deg": 0.5, "fire_tol_deg": 1.1, "burst_s": 99.0, "burst_pause_s": 0.0,
+        "aim_sigma_deg": 0.85, "fire_tol_deg": 1.1, "burst_s": 99.0, "burst_pause_s": 0.0,
         "engage_m": 215.0, "pref_m": 115.0, "secondary": 0.85, "react": 0.15, "strafe": 1.2,
         "converge": 1.0,
     },

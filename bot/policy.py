@@ -19,21 +19,24 @@ KNOBS = {
     "engage_hp_frac": 0.30,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 0.30,      # running away when a fresh hostile is close
+    "evade_hp_frac": 0.25,      # running away when a fresh hostile is close
     "evade_dist": 120.0,
-    "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
+    "evade_aimed_hp": 0.30,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
-    "farm_threat": 140.0,
-    "crate_threat": 150.0,
+    "farm_threat": 60.0,
+    "farm_r": 300.0,
+    "farm_hp": 0.35,
+    "crate_threat": 60.0,
+    "crate_r": 250.0,
     "loot_threat": 60.0,
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 0.95,            # start healing below this fraction
+    "heal_hp": 0.80,            # start healing below this fraction
     "heal_exit": 0.97,          # stop at this fraction
-    "heal_safe_dist": 250.0,    # only heal when the nearest fresh hostile is farther
-    "heal_los": 1,              # heal whenever nobody can see us, distance regardless
+    "heal_safe_dist": 140.0,    # only heal when the nearest fresh hostile is farther
+    "heal_los": 0,              # heal whenever nobody can see us, distance regardless
     "heal_los_dist": 200.0,     # only consider hostiles this close for the LOS test
     "cube_chase": 1,            # detour to power cubes lying around
     "target_weak": 1,           # prefer the most damaged fresh target over the nearest one
@@ -45,7 +48,7 @@ KNOBS = {
     "finish_hp": 0.75,           # close in and finish targets below this hp fraction
     "finish_d": 30.0,           # preferred range while finishing
     "chase": 1,                 # keep pushing a wounded target that slipped out of sight
-    "camp": 0,                  # hold a low-exposure spot inside the next zone
+    "camp": 1,                  # hold a low-exposure spot inside the next zone
     "camp_frac": 0.75,          # stay inside this fraction of the next radius
     "camp_leave": 12.0,         # seconds of slack before the next shrink to relocate
     "outnumber": 0,             # extra caution when more than one fresh hostile is visible
@@ -242,6 +245,9 @@ class Policy:
             if threat is not None and fresh:
                 self.evade_from = (threat.x, threat.y)
             goal = self._evade_goal(pos, self.evade_from[0], self.evade_from[1], zone_center, zr)
+        elif threat is not None and fresh and threat_d < k["engage_dist"] and fight_ok:
+            mode = "FIGHT"
+            goal = self._fight_goal(pos, threat, threat_d, t)
         elif camp_goal is not None:
             mode = "CAMP"
             goal = None if camp_arrived else camp_goal
@@ -263,9 +269,6 @@ class Policy:
         elif cube_goal is not None:
             mode = "LOOT"
             goal = cube_goal
-        elif threat is not None and fresh and threat_d < k["engage_dist"] and fight_ok:
-            mode = "FIGHT"
-            goal = self._fight_goal(pos, threat, threat_d, t)
         elif (
             chase is not None
             and threat is None
@@ -625,11 +628,11 @@ class Policy:
     # ------------------------------------------------------------------ farming
     def _npc_step(self, obs, t, threat_d, hp_frac):
         """Drones wander close and drop two cubes; farm one when nothing else is urgent."""
-        if hp_frac < 0.5 or threat_d < self.k["farm_threat"]:
+        if hp_frac < self.k["farm_hp"] or threat_d < self.k["farm_threat"]:
             return 1e9, None
         best = None
         best_d = 1e9
-        for d, tr in self.perc.npcs(t, 95.0):
+        for d, tr in self.perc.npcs(t, self.k["farm_r"]):
             if t - tr.seen > 0.5:
                 continue
             if d < best_d:
@@ -652,7 +655,7 @@ class Policy:
         best_d = 1e9
         for c in obs.get("crates") or []:
             d = math.dist(c["pos"][:2], pos[:2])
-            if d > 95.0 or d < 6.0:
+            if d > self.k["crate_r"] or d < 6.0:
                 continue
             if d < best_d and self.w.has_los(pos[0], pos[1], c["pos"][0], c["pos"][1]):
                 best_d = d
