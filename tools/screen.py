@@ -18,12 +18,11 @@ import time
 
 CONFIGS = [
     ("base", {}),
-    ("outFinish", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0}),
-    ("ofNoCamp", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0}),
-    ("ofGun80NoCamp", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0, "standoff": {"gun": 80.0, "laser": 150.0, "mortar": 150.0, "lightning": 28.0}}),
-    ("ofNoCampRush0", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0, "rush_s": 0.0}),
-    ("ofNoCampHeal", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0, "heal_hp": 0.95, "heal_exit": 0.98, "heal_safe_dist": 200.0}),
-    ("ofNoCampEvade", {"finish_hp": 0.90, "finish_d": 35.0, "outnumber": 1.0, "camp": 0.0, "evade_hp_frac": 0.30, "evade_dist": 140.0}),
+    ("s30p09", {"strafe_step": 30.0, "strafe_period": 0.9, "strafe_jitter": 0.4}),
+    ("s40p09", {"strafe_step": 40.0, "strafe_period": 0.9, "strafe_jitter": 0.4}),
+    ("s50p09", {"strafe_step": 50.0, "strafe_period": 0.9, "strafe_jitter": 0.4}),
+    ("s40p07", {"strafe_step": 40.0, "strafe_period": 0.7, "strafe_jitter": 0.5}),
+    ("s40p12", {"strafe_step": 40.0, "strafe_period": 1.2, "strafe_jitter": 0.4}),
 ]
 
 

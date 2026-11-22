@@ -19,9 +19,9 @@ KNOBS = {
     "engage_hp_frac": 0.30,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 0.25,      # running away when a fresh hostile is close
-    "evade_dist": 120.0,
-    "evade_aimed_hp": 0.30,     # someone is pointing a weapon at us
+    "evade_hp_frac": 0.30,      # running away when a fresh hostile is close
+    "evade_dist": 140.0,
+    "evade_aimed_hp": 0.50,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
     "farm_threat": 60.0,
@@ -43,10 +43,10 @@ KNOBS = {
     "drop_early": 0,            # start walking to a supply drop before it lands
     "early_evade_s": 0.0,       # treat every fresh contact as a reason to run this early
     "dodge": 1,                 # side-step shells that are about to pass through us
-    "rush_s": 90.0,              # opening weapon rush (laser/lightning) until this time
-    "rush_dist": 170.0,         # only chase gear this far
+    "rush_s": 150.0,              # opening weapon rush (laser/lightning) until this time
+    "rush_dist": 200.0,         # only chase gear this far
     "finish_hp": 0.90,           # close in and finish targets below this hp fraction
-    "finish_d": 35.0,           # preferred range while finishing
+    "finish_d": 30.0,           # preferred range while finishing
     "chase": 1,                 # keep pushing a wounded target that slipped out of sight
     "camp": 1,                  # hold a low-exposure spot inside the next zone
     "camp_frac": 0.75,          # stay inside this fraction of the next radius
@@ -56,7 +56,7 @@ KNOBS = {
     "trade_hp": 0.80,           # disengage when we are losing a duel...
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
-    "standoff": {"gun": 100.0, "laser": 150.0, "mortar": 150.0, "lightning": 28.0},
+    "standoff": {"gun": 60.0, "laser": 120.0, "mortar": 150.0, "lightning": 25.0},
 }
 
 
