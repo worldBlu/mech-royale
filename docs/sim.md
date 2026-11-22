@@ -175,6 +175,7 @@ bot under test          real practice   sim vision     sim pings    vision place
 kit example_bot.py          ~1.15          1.188          1.458       14.81 / 140.9 s
 bot @ 96478d5                2.85          2.854          2.562       13.15 / 143.8 s
 bot @ 866bf59                3.04          2.604            --        13.40 / 122.8 s
+bot @ 8988bf0 (HEAD)          --           3.000            --        13.00 / 167.0 s
 ```
 
 * `96478d5` is the primary anchor: real 2.85 vs simulated 2.854. The older commit `866bf59`
