@@ -19,19 +19,19 @@ KNOBS = {
     "engage_hp_frac": 0.30,     # do not pick a fight with our own hp below this
     "engage_target_hp": 0.85,   # healthy target: only commit when we are clearly healthier
     "engage_our_hp": 0.72,
-    "evade_hp_frac": 0.30,      # running away when a fresh hostile is close
-    "evade_dist": 120.0,
+    "evade_hp_frac": 0.15,      # running away when a fresh hostile is close
+    "evade_dist": 90.0,
     "evade_aimed_hp": 0.70,     # someone is pointing a weapon at us
     "evade_aimed_dist": 230.0,
     "evade_step": 90.0,
-    "farm_threat": 260.0,
-    "crate_threat": 260.0,
+    "farm_threat": 140.0,
+    "crate_threat": 150.0,
     "loot_threat": 60.0,
     "boost_energy": 22.0,
     "cover": 1,                 # rotate toward scenery that blocks lines of sight
     "heal": 1,                  # break contact and let the 45/s regen top us up
-    "heal_hp": 0.95,            # start healing below this fraction
-    "heal_exit": 0.97,          # stop at this fraction
+    "heal_hp": 0.60,            # start healing below this fraction
+    "heal_exit": 0.75,          # stop at this fraction
     "jink": 1,                   # weave while moving so their gun has to lead a wobbly target
     "jink_frac": 0.55,
     "jink_hz": 1.1,
