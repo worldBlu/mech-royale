@@ -1,4 +1,4 @@
-# Scoreboard
+﻿# Scoreboard
 
 Practice score is `mean(16 - place)` over the practice board's matches against the house-bot squad.
 Baseline to beat: **1.15** (the kit's Python example bot, shown on the page as 1.21-1.28 in later renders).
@@ -63,6 +63,7 @@ The organisers rescored each team's picked builders-3 entry onto builders-4 auto
 | 36 | `78576b4` | 11-22 06:17 | **3.83 (BB-58FCE83, confirmed by duplicate BB-9BB443F6)** | weave from 320 m out, fight at 210-240 m - **best, final entry** |
 | 37 | `806392d` | 11-22 06:26 | 3.27 (BB-15D0B5A) | wider weave amplitude (0.62) at the same trigger |
 | 38 | `eacb9af` | 11-22 06:31 | 3.33 (BB-B928A57F) | faster weave frequency (1.35 Hz) |
+| 39 | `c889926` | 11-22 06:47 | 3.56 (BB-1CB95BB2) | stay in the fight when only aimed at, above 55% hp - a step back |
 
 Rejected: BB-7C82F652 - `9d1fa5b` submitted before it was pushed ("commit is not in that repository").
 Rejections still consume one of the hour's submissions. The site also renders stale scores for a few
