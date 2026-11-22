@@ -11,35 +11,43 @@ where it differs.
 From the repo root (a Python 3.12 interpreter is enough; nothing outside the stdlib is used):
 
 ```powershell
-# 48 practice matches of bot/main.py (the scoring command)
-python tools/eval.py --matches 48
+# 48 practice matches of bot/main.py (the scoring command; calibrated reference mode)
+python tools/eval.py --matches 48 --house-vision vision
 
 # Fast loop while tuning (4 matches, 150 s cap per match)
-python tools/eval.py --quick
+python tools/eval.py --quick --house-vision vision
 
 # A/B two policy variants on the same seeds
 python tools/eval.py --matches 24 --seed 7 --variant no-fire
 python tools/eval.py --matches 24 --seed 7 --knob vision.range=120
 
+# Score an exported older commit without touching bot/
+python tools/eval.py --bot-dir .reports/bot_96478d5/bot --matches 48 --house-vision vision
+
+# House-bot skill sensitivity (applies the override to every difficulty level)
+python tools/eval.py --matches 24 --house-vision vision --house-knob aim_sigma_deg=3.0
+
 # The kit's reference bot through the same in-process interface (sanity check)
-python tools/eval.py --bot example --matches 48
+python tools/eval.py --bot example --matches 48 --house-vision vision
 
 # Machine-readable results + one JSONL replay frame trace per match
 python tools/eval.py --matches 48 --json-out results.json --dump replay.jsonl
 ```
 
 Useful flags: `--matches N`, `--seed S` (match i uses `S + i*10007`, so a seed set is stable),
-`--duration SECONDS`, `--bot main|example`, repeatable `--knob dotted.path=value` (applied to a
-copy of `hello.config` before the bot and match are built), `--variant no-fire|no-boost|no-loot|no-farm`,
-`--quiet`, `--allow-errors`, `--json-out FILE`, `--dump FILE`.
+`--duration SECONDS`, `--bot main|example`, `--bot-dir PATH`, `--house-vision pings|vision`,
+repeatable `--knob dotted.path=value` (applied to a copy of `hello.config` before the bot and
+match are built), repeatable `--house-knob key=value` (house skill; keys in
+`tools/sim/house.py` `DEFAULT_SKILL`), `--variant no-fire|no-boost|no-loot|no-farm`, `--quiet`,
+`--allow-errors`, `--json-out FILE`, `--dump FILE`.
 
 The per-match line prints seed, place, score, match time, end reason, end HP, kills, damage
 dealt/taken, zone damage and time outside the zone, cubes and decision latency. The summary adds
 mean score/place, placement histogram, survival mean/median, damage totals, decision-time
 mean/max and the number of decisions over the 50 ms budget.
 
-Throughput on this box: **~1.0-1.3 s per 480 s match, ~51 s for 48 matches on one core**, far
-inside the 15-minute budget. `--quick` is roughly 4 matches x <=150 s.
+Throughput on this box: **~0.7-1.4 s per 480 s match, 35-66 s for 48 matches on one core**, inside
+the 90 s target and far inside the 15-minute budget. `--quick` is roughly 4 matches x <=150 s.
 
 ## Scoring (same rule as the track)
 
@@ -247,35 +255,46 @@ Wiring: `tools/sim/match.py` `HOUSE_PING` (line 33), `Match.__init__(..., house_
 (line 61); `tools/eval.py --house-vision`; diagnostics in `Match.finish()` (`house_sight_avg`,
 `house_sight_max`, `house_sight_ever`, `house_pings`, `house_known_frac`, `bot_fails`).
 
-Measured cost of the model choice (48 matches, seed 1, same seeds):
+Measured cost of the model choice under the calibrated defaults (48 matches, seed 1, same seeds):
 
 ```
-example bot  pings 1.896 -> vision 1.417   (paired vision-pings -0.479, se 0.218)
-current bot  pings 4.625 -> vision 3.646   (paired vision-pings -0.250, se 0.697)
+example bot     pings 1.458 -> vision 1.188
+bot @ 96478d5   pings 2.562 -> vision 2.854
 ```
 
-The example bot's real reported score is ~1.15, so the **vision model is closer to the real
-track**; under vision the current bot's win count drops 5 -> 1 and its place histogram compresses
-toward the middle (place 16: 10 -> 7, place 15: 12 -> 9, place 12: 2 -> 8), i.e. it dies less
-first but also stops snowballing. Tuning conclusions about aggression/cover should be re-checked
-under `--house-vision vision`; the pings model makes fleeing pointless by construction.
+The example bot's real ~1.15 is matched only by `vision`; `pings` is +0.27 high. For the current
+bot the direction reversed after calibration: `pings` is 0.29 *lower* than vision. With calibrated
+skill the house team's problem is not finding the player (a noisy shared track is enough) but
+aiming at it, and `vision` supplies an exact current position whenever any house has line of
+sight; the noisy pings track only tells the team roughly where to run. `vision` remains the
+structurally faithful model and the calibration reference; quote it. Tuning conclusions about
+aggression/cover should be re-checked under it, because under `pings` breaking line of sight
+cannot shake the house team.
 
-Sanity probe (`tools/sim/probe_house_vision.py`, a bot that stands still, 8 seed-1 matches):
+Sanity probe (`tools/sim/probe_house_vision.py`, a bot that stands still, 8 seed-1 matches,
+calibrated defaults):
 
 ```
-pings   mean survival 120.0 s (median 139.1, max 235.7), 1.05 houses seeing, 59.8 pings/match
-vision  mean survival 159.8 s (median 188.4, max 208.8), 0.57 houses seeing,  0.0 pings/match
+pings   mean survival  64.4 s (median  61.9, max 130.9), 1.13 houses seeing, 28.2 pings/match
+vision  mean survival 114.6 s (median 139.2, max 204.6), 0.69 houses seeing,  0.0 pings/match
 ```
 
 Vision genuinely gates the houses (no pings, fewer simultaneous sightings); the standing target
-survives *longer* under vision because, with omniscient pings, the whole house team converges on
-it immediately.
+survives *longer* under vision because the whole house team no longer converges immediately on a
+pinged position. Both modes kill a standing target in every match (place 16), so this probe shows
+the sensing difference, not an escape strategy.
 
 
 ## How to interpret A/B results
 
 * Keep the seed set identical (`--seed`), run at least 24-48 matches, and compare the mean score
-  and the placement histogram, not a single match.
+  and the placement histogram, not a single match. With the calibrated defaults a 48-match mean
+  has a standard error of roughly 0.5-0.6 score, so an unpaired difference below ~0.5 is noise;
+  paired seeds (same seed set for both variants) are much tighter and can resolve ~0.25.
+* Absolute-score checks: after any change to `bot/**` or to the house knobs, re-run the two
+  calibration anchors (`example_bot.py` -> ~1.19, exported `96478d5` -> ~2.85 under
+  `--house-vision vision`) before quoting an absolute number. If they move, the simulator's
+  absolute scale moved, not the bot.
 * The simulator is most trustworthy for: weapon/engagement-range policy changes, zone rotation,
   loot timing, target selection, and (somewhat) hit-rate changes from aim/lead logic.
 * It is least trustworthy for: exact movement tricks (roof climbing, wall-sliding speed), the
