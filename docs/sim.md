@@ -27,6 +27,12 @@ python tools/eval.py --bot-dir .reports/bot_96478d5/bot --matches 48 --house-vis
 # House-bot skill sensitivity (applies the override to every difficulty level)
 python tools/eval.py --matches 24 --house-vision vision --house-knob aim_sigma_deg=3.0
 
+# Private-scorer-like pressure for passive/cover strategies (see "Harsh house preset")
+python tools/eval.py --matches 48 --house-vision vision --house-preset harsh
+python tools/screen.py --matches 48 --seeds 1,424242 --jobs 14 \
+  --house-preset harsh --house-vision vision \
+  --configs-file tools/screen_configs_harsh.json --out .reports/screen_harsh
+
 # The kit's reference bot through the same in-process interface (sanity check)
 python tools/eval.py --bot example --matches 48 --house-vision vision
 
@@ -35,7 +41,9 @@ python tools/eval.py --matches 48 --json-out results.json --dump replay.jsonl
 ```
 
 Useful flags: `--matches N`, `--seed S` (match i uses `S + i*10007`, so a seed set is stable),
-`--duration SECONDS`, `--bot main|example`, `--bot-dir PATH`, `--house-vision pings|vision`,
+`--duration SECONDS`, `--bot main|example`, `--bot-dir PATH`,
+`--house-vision pings|vision`, `--house-preset calibrated|harsh`, repeatable
+`--house-sense key=value` (`shared_memory`, `ping_interval`, `ping_noise`, vision mode only),
 repeatable `--knob dotted.path=value` (applied to a copy of `hello.config` before the bot and
 match are built), repeatable `--house-knob key=value` (house skill; keys in
 `tools/sim/house.py` `DEFAULT_SKILL`), `--variant no-fire|no-boost|no-loot|no-farm`, `--quiet`,
@@ -136,7 +144,10 @@ mech dies because that fixes the score; the remaining houses do not need simulat
   simulator gives **2.60**; the 0.4 gap is inside the 48-match noise (per-match sd ~3.9, so the
   standard error of a 48-match mean is ~0.56). Absolute numbers are only meaningful with this
   calibrated default set and the matching seed set; they will drift if `bot/**` or the house
-  knobs change. Re-run the two anchors after either changes.
+  knobs change. Re-run the two anchors after either changes. For builds scored on the newer
+  private evaluator, the default preset is too generous to passive play; use
+  `--house-preset harsh` (below), which reproduces that scorer's band (real 2.49-2.60) to within
+  the same noise. The two presets are separate calibrations — do not mix numbers across them.
 * **The house-bot AI is invented.** We do not have the server's house code. The skill knobs
   (below) are the fidelity levers; the defaults reproduce the two anchors above, but the real
   houses may distribute skill differently across the 15 bots. Treat differences of less than
@@ -284,6 +295,77 @@ Vision genuinely gates the houses (no pings, fewer simultaneous sightings); the 
 survives *longer* under vision because the whole house team no longer converges immediately on a
 pinged position. Both modes kill a standing target in every match (place 16), so this probe shows
 the sensing difference, not an escape strategy.
+
+
+### Harsh house preset (private-scorer calibration)
+
+The calibrated default preset was fitted on older builds whose real scores were known (`96478d5`
+2.85, example ~1.15). When five newer builds were scored on the real builders-4 evaluator (96
+private seeds) they formed a narrow band, but the default preset spread them out and over-scored
+passive play:
+
+```
+build      real (96 seeds)   default preset (48 seed-1 vision)
+914fd36          2.51                  3.46
+0321067          2.49                  2.94
+7481be9          2.60                  3.65
+c989831          2.51                  3.42
+2b625c7          2.53                  4.90   (camp build: +2.4 in sim, +0.0 real)
+```
+
+`--house-preset harsh` is an additional, separately calibrated model for that scorer. It keeps a
+stale team lock on the player through line-of-sight breaks (union of last-known position and 25 s
+of noisy pings every 1.0 s with 5 m error), converges with boost, closes to 18 m and sweeps random
+points around the last-known spot, lobs blind mortars at the stale position, shoots straighter
+(`aim_sigma_scale` 0.55, `fire_tol_scale` 0.75, shorter reaction), starts nearly every house with a
+secondary weapon (`secondary_scale` 2.0), and applies a `damage_scale` 1.20 to house outgoing
+damage (an explicit stand-in for coordinated focus fire). The calibrated default preset is unchanged.
+
+Measured with the harsh preset (48 matches, seed 1, `--house-vision vision`):
+
+```
+build      sim harsh   real band
+914fd36      2.17        2.51
+0321067      2.73        2.49
+7481be9      2.46        2.60
+c989831      2.75        2.51
+2b625c7      2.71        2.53
+mean          2.56        2.53
+example      0.98       ~1.15
+```
+
+The five-build mean now matches the real band (2.56 vs 2.53) instead of sitting ~0.9 above it,
+and per-build values are within ~0.3 of the real ones. The example bot is purposefully left
+anchored on the calibrated default preset (1.19); under harsh pressure it scores ~1.0, i.e. harsh
+is the harder model and not the right preset for quoting the example. The residual is not
+tunable away: RNG trajectory divergence makes a 48-match mean move by ~±0.4 between reruns of
+near-identical house settings (e.g. the five-build mean was 2.27 on a 96-match run of the same
+settings, and `c989831` scored 2.21-3.19 across nearby damage-scale values), so treat the harsh
+preset as "reproduces the real band and the camp-build correction to within noise", not as a
+per-build predictor.
+
+Use it for screening strategies whose score depends on passive/cover play, where the default
+preset is known to be too generous, and keep the calibrated preset for absolute-score anchors.
+Diagnostics: `house_pings`, `house_sight_avg`, `house_min_dist`, `house_close_frac` in the JSON
+result. The harsh team's settings live in `tools/sim/house.py` `PRESETS["harsh"]` (`level` +
+`sense`); override sense at runtime with e.g. `--house-sense ping_noise=8` or individual level
+knobs with `--house-knob aim_sigma_deg=3.0`. Screen example:
+
+```
+python tools/screen.py --matches 48 --seeds 1,424242 --jobs 14 \
+  --house-preset harsh --house-vision vision \
+  --configs-file tools/screen_configs_harsh.json --out .reports/screen_harsh
+```
+
+First paired screen under this preset (current `bot/` working tree, 48 matches per seed, seeds
+1 and 424242, base mean 2.46/1.98): `camp` +0.67 (sd 0.06, consistent on both seeds),
+`finish_hp=0.35` +0.42 (0.00), `boost_energy=10` +0.29 (0.35), `outnumber=1` +0.28 (0.02),
+`evade_hp_frac=0.50` +0.23 (0.27). Largest losses: `engage_dist=60` -0.97, `evade_hp_frac=0.70`
+-0.56, `target_weak=0` -0.54, `standoff.gun=100` -0.41, `rush_s=0` -0.31. The `camp` result is
+flagged as an artifact to trust least: the real camp build (`2b625c7`) scored 2.53 in the real
+band (no gain over its peers), while this screen still rewards camping, so the harsh preset
+punishes passive play less than the private scorer does even though it closes most of the gap.
+
 
 
 ## How to interpret A/B results

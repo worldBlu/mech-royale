@@ -50,6 +50,6 @@ once we "pick" an entry it stops auto-replacing. After each new best, pick it ag
 - the exact commit hash that was submitted (the organisers keep a copy of every scored commit),
 - the reported score and any reject reason,
 - what changed in that submission and what we expected.
-| 17 | `bce2a36ae8f2edde09b11e9fd3fc49aa93e584bf` | 2026-11-22 01:40 PST | builders-4 | pending (BB-1596495A) | the aggressive profile ported onto the current policy code (loot reach, camp fallback, fight-position machinery off) |
-| 18 | `fd015ddddb4e481a681571f6d6f54548f200bac8` | 2026-11-22 02:13 PST | builders-4 | pending | score fight positions: stay out of other bots' lines of sight while firing, duck while reloading |
-| 19 | `6f84359d77a6855048638842ba78c2eb2081a490` | 2026-11-22 02:35 PST | builders-4 | pending | + chase a wounded target that slipped out of sight |
+| 17 | `bce2a36ae8f2edde09b11e9fd3fc49aa93e584bf` | 2026-11-22 01:40 PST | builders-4 | **2.89** (BB-1596495A) | the aggressive profile ported onto the current policy code (loot reach, camp fallback, fight-position machinery off) |
+| 18 | `82cfe5b2b204b8c5d36fd6d6279ef648a1313de0` | 2026-11-22 02:13 PST | builders-4 | pending | the 3.36 build plus fight-position scoring: shoot from outside other bots' lines of sight, duck while reloading |
+| 19 | `6f84359d77a6855048638842ba78c2eb2081a490` | 2026-11-22 02:35 PST | builders-4 | pending | modern code + fight positions + chase a wounded target that slipped out of sight |
