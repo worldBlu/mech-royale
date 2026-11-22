@@ -50,7 +50,7 @@ KNOBS = {
     "weapon_r": 150.0,          # weapons worth a detour even while a fight is near
     "weapon_threat": 25.0,      # never turn our back on a hostile this close to grab one         # only chase gear this far
     "finish_hp": 0.90,           # close in and finish targets below this hp fraction
-    "finish_d": 35.0,           # preferred range while finishing
+    "finish_d": 55.0,           # preferred range while finishing
     "camp": 0,                  # hold a low-exposure spot inside the next zone
     "camp_frac": 0.75,          # stay inside this fraction of the next radius
     "camp_leave": 12.0,         # seconds of slack before the next shrink to relocate
@@ -59,7 +59,7 @@ KNOBS = {
     "trade_hp": 0.80,           # disengage when we are losing a duel...
     "trade_dur": 2.5,           # ...for at least this many seconds
     "trade_target_hp": 0.92,    # only if the target is still this healthy
-    "standoff": {"gun": 220.0, "laser": 260.0, "mortar": 150.0, "lightning": 28.0},
+    "standoff": {"gun": 210.0, "laser": 240.0, "mortar": 150.0, "lightning": 28.0},
 }
 
 
