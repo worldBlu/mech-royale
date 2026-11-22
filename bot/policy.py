@@ -49,7 +49,7 @@ KNOBS = {
     "rush_dist": 170.0,
     "weapon_r": 150.0,          # weapons worth a detour even while a fight is near
     "weapon_threat": 25.0,      # never turn our back on a hostile this close to grab one         # only chase gear this far
-    "finish_hp": 0.35,           # close in and finish targets below this hp fraction
+    "finish_hp": 0.90,           # close in and finish targets below this hp fraction
     "finish_d": 35.0,           # preferred range while finishing
     "camp": 0,                  # hold a low-exposure spot inside the next zone
     "camp_frac": 0.75,          # stay inside this fraction of the next radius
