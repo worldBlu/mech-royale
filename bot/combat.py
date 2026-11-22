@@ -43,6 +43,13 @@ LIGHTNING_CONE_FRAC = 0.95
 MORTAR_TUBE_EXTRA = 2.5    # mortar tube is pos.z+9.5, i.e. this much above the gun muzzle
 MIN_MORTAR_RANGE = 20.0    # closer than this the 7 m splash can hurt us too
 
+# Incoming-fire dodge: treat a projectile as a straight line for this long, and count it
+# as a threat when that line passes within a gunnery radius of our body.
+THREAT_R = {"gun": 4.0, "mortar": 7.0}   # mortar = splash radius; gun = body + margin
+THREAT_R_DEFAULT = 4.0
+THREAT_HORIZON = 1.5       # seconds of projectile travel to look ahead
+DODGE_FORWARD_DOT = 0.15   # below this the forward preference is too weak; lean instead
+
 
 def ang_diff(a, b):
     return (a - b + math.pi) % (2.0 * math.pi) - math.pi
@@ -50,6 +57,10 @@ def ang_diff(a, b):
 
 def _clamp(v, lo, hi):
     return lo if v < lo else (hi if v > hi else v)
+
+
+def _finite(v):
+    return not (v != v or v == math.inf or v == -math.inf)
 
 
 class Combat:
@@ -121,6 +132,144 @@ class Combat:
             return None
         return slot, weapons[slot]
 
+    # -------------------------------------------------------------- incoming fire
+    def threat_scan(self, obs, now, horizon=THREAT_HORIZON):
+        """Incoming projectiles whose straight path passes within a body radius of us.
+
+        Each entry is ``{"id", "kind", "miss", "t", "pos", "vel", "r", "urgency"}``:
+        ``miss`` is the closest distance (m) between the projectile line and our vertical
+        body segment, ``t`` is the time (s) of that closest approach, and ``urgency`` rises
+        as the miss shrinks and ``t`` drops.  The list is sorted most urgent first.
+
+        Only gun bullets and mortar shells are considered (lasers/lightning are beams);
+        projectiles already past us and receding are ignored, and malformed or NaN input is
+        skipped rather than raised.  ``now`` is the observation time (reserved: the scan
+        uses the observation's own positions, so it is not needed for the projection).
+        """
+        out = []
+        try:
+            me = (obs or {}).get("self") or {}
+            mx, my, mz = (float(v) for v in me["pos"])
+            vel = me.get("vel") or (0.0, 0.0, 0.0)
+            mvx, mvy = float(vel[0]), float(vel[1])
+            height = float((me.get("stats") or {}).get("height", 9.0))
+            projectiles = obs.get("projectiles") or ()
+        except (TypeError, KeyError, IndexError, ValueError, AttributeError):
+            return out
+        if not (_finite(mx) and _finite(my) and _finite(mz)
+                and _finite(mvx) and _finite(mvy) and _finite(height)):
+            return out
+        for p in projectiles:
+            try:
+                if not isinstance(p, dict):
+                    continue
+                kind = p.get("kind") or "gun"
+                if kind not in THREAT_R:
+                    continue
+                px, py, pz = (float(v) for v in p["pos"])
+                vx, vy, vz = (float(v) for v in p["vel"])
+            except (TypeError, KeyError, IndexError, ValueError, AttributeError):
+                continue
+            if not (_finite(px) and _finite(py) and _finite(pz)
+                    and _finite(vx) and _finite(vy) and _finite(vz)):
+                continue
+            r = THREAT_R.get(kind, THREAT_R_DEFAULT)
+            rx, ry = px - mx, py - my
+            vrx, vry = vx - mvx, vy - mvy
+            vv = vrx * vrx + vry * vry
+            if vv <= 1e-9:
+                continue                      # nothing in flight relative to us
+            approach = -(rx * vrx + ry * vry)
+            t = approach / vv
+            if t < 0.0:
+                t = 0.0
+            elif t > horizon:
+                t = horizon
+            cx, cy = rx + vrx * t, ry + vry * t
+            pzt = pz + vz * t
+            if pzt < mz:
+                dv = mz - pzt
+            elif pzt > mz + height:
+                dv = pzt - (mz + height)
+            else:
+                dv = 0.0
+            miss = math.hypot(cx, cy, dv)
+            if miss > r:
+                continue
+            if t <= 1e-6 and approach >= 0.0:
+                continue                      # closest approach is behind us: already past
+            prox = 1.0 - miss / r
+            time_f = 1.0 - 0.55 * (t / horizon) if horizon > 0.0 else 1.0
+            out.append({"id": p.get("id"), "kind": kind, "miss": miss, "t": t,
+                        "pos": (px, py, pz), "vel": (vx, vy, vz), "r": r,
+                        "urgency": _clamp(prox * time_f, 0.0, 1.0)})
+        out.sort(key=lambda q: (-q["urgency"], q["t"], q["miss"]))
+        return out
+
+    def dodge_vector(self, obs, me=None):
+        """Unit lateral escape direction and urgency (0..1) from the worst projectile.
+
+        The direction is perpendicular to the threat's horizontal path.  If our current
+        velocity (or aim, when standing) prefers one of the two perpendicular sides, that
+        side is taken; otherwise we keep leaning to the side of the path we are already on.
+        Returns ``(0.0, 0.0, 0.0)`` when the scan sees nothing incoming.  No state, no
+        exceptions, one linear pass over the projectiles.
+        """
+        try:
+            threats = self.threat_scan(obs, float((obs or {}).get("t", 0.0)))
+        except Exception:
+            return 0.0, 0.0, 0.0
+        if not threats:
+            return 0.0, 0.0, 0.0
+        q = threats[0]
+        vx, vy = q["vel"][0], q["vel"][1]
+        speed = math.hypot(vx, vy)
+        if speed > 1e-6:
+            nx, ny = -vy / speed, vx / speed
+        else:
+            px, py = q["pos"][0], q["pos"][1]
+            rx, ry = -px, -py
+            rlen = math.hypot(rx, ry)
+            if rlen <= 1e-6:
+                return 0.0, 0.0, 0.0
+            nx, ny = rx / rlen, ry / rlen
+        try:
+            if me is None:
+                me = (obs or {}).get("self") or {}
+            vel = me.get("vel") or (0.0, 0.0, 0.0)
+            fx, fy = float(vel[0]), float(vel[1])
+        except (TypeError, KeyError, IndexError, ValueError, AttributeError):
+            fx, fy = 0.0, 0.0
+        fspeed = math.hypot(fx, fy)
+        if fspeed > 0.5 and _finite(fspeed):
+            fx, fy = fx / fspeed, fy / fspeed
+        else:
+            try:
+                yaw = float((me.get("aim") or (0.0, 0.0))[0])
+                fx, fy = math.cos(yaw), math.sin(yaw)
+            except (TypeError, KeyError, IndexError, ValueError, AttributeError):
+                fx, fy = 0.0, 0.0
+        fdot = fx * nx + fy * ny
+        if abs(fdot) >= DODGE_FORWARD_DOT:
+            if fdot < 0.0:
+                nx, ny = -nx, -ny
+        else:
+            # No useful forward side: lean away from the path, based on where we are now.
+            try:
+                mx = float(me["pos"][0])
+                my = float(me["pos"][1])
+                px, py = q["pos"][0], q["pos"][1]
+                rx, ry = mx - px, my - py
+                along = rx * vx + ry * vy
+                lx = rx - along * vx / (speed * speed)
+                ly = ry - along * vy / (speed * speed)
+                if _finite(lx) and _finite(ly) and math.hypot(lx, ly) > 0.5:
+                    if lx * nx + ly * ny < 0.0:
+                        nx, ny = -nx, -ny
+            except (TypeError, KeyError, IndexError, ValueError, AttributeError):
+                pass
+        return float(nx), float(ny), _clamp(float(q["urgency"]), 0.0, 1.0)
+
     def pick(self, me, d, los, tr=None):
         """Best slot to shoot with at this target, or None."""
         mx, my = float(me["pos"][0]), float(me["pos"][1])
@@ -179,6 +328,29 @@ class Combat:
         scale = max(1.0, 1.0 + 0.05 * cubes)
         return z + 4.5 * scale
 
+    def _ground_z(self, x, y):
+        """Terrain height under (x, y) when the world can tell us; None for stubs."""
+        fn = getattr(self.w, "terrain_z", None)
+        if fn is None:
+            return None
+        try:
+            z = fn(x, y)
+        except Exception:
+            return None
+        return None if z is None else float(z)
+
+    def _center_floor(self, tr, x, y):
+        """Lowest plausible target centre at (x, y): terrain plus the body offset.
+
+        A track's vertical velocity is instantaneous - a falling mech lands instead of
+        sinking through the map and a jumping one comes back down - so a ballistic lead
+        must not extrapolate `vz * tof` below the ground.
+        """
+        g = self._ground_z(x, y)
+        if g is None:
+            return None
+        return g + (self._target_center(tr) - float(tr.z))
+
     def _ballistic_pitch(self, x, dz, v, g):
         """Low-angle launch pitch hitting a point x ahead, dz above the tube.
 
@@ -236,6 +408,9 @@ class Combat:
                 px = tx + vx * t
                 py = ty + vy * t
                 pz = tz + vz * t
+                floor = self._center_floor(tr, px, py)
+                if floor is not None:
+                    pz = max(pz, floor)
                 r = math.sqrt((px - mx) ** 2 + (py - my) ** 2 + (pz - gz) ** 2)
                 t = max(0.0, r - SHOT_ORIGIN) / max(1.0, v)
             yaw = math.atan2(py - my, px - mx)
@@ -264,6 +439,9 @@ class Combat:
             px = tx + vx * tof
             py = ty + vy * tof
             pz = tz + vz * tof
+            floor = self._center_floor(tr, px, py)
+            if floor is not None:
+                pz = max(pz, floor)
         horiz = math.hypot(px - mx, py - my)
         pitch, _ok = self._ballistic_pitch(horiz, pz - gz, v, self.gravity)
         yaw = math.atan2(py - my, px - mx)

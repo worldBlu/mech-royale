@@ -16,11 +16,18 @@ measure it (`tools/replay.py`) and the synthetic test suite (`tests/test_combat.
 - A target the server currently lists in `obs.mechs` is visible now; its line is treated as
   clear for shooting even when the world grid says "tree", because trees block vision but
   not bullets/lasers.
-- Measured on `kit/check/stream.jsonl.gz` with the current policy: gun 16/27 shots (59.3%,
+- Measured on `kit/check/stream.jsonl.gz` with the current policy: gun 16/28 shots (57.1%,
   720 damage, 45/hit); laser arm 8 shots / 7 hits (87.5%, 2205 damage, 315/hit); mortar arm
-  3 shots / 0 hits (2 "untracked", 1 tracked miss at 9.97 m surface distance; 0 damage);
+  3 shots / 0 hits (2 "untracked", 1 tracked miss at 4.80 m surface distance; 0 damage);
   lightning never had a target inside 45 m. The mortar is behind a `use_mortar` knob so the
   Lead can A/B it in the real match without a code change.
+- A falling target's instantaneous `vz` is not extrapolated below the terrain: both lead
+  loops clamp the predicted body centre to `terrain_z(x, y)` plus the body offset, so a
+  mech that is falling/landing is aimed at where it can actually be, not 20 m underground.
+- Incoming fire: `threat_scan` finds projectiles that will pass within 4 m (gun) or 7 m
+  (mortar splash) in the next 1.5 s, and `dodge_vector` suggests a perpendicular escape
+  direction with a 0..1 urgency for the Lead's movement code. Both are pure, state-free and
+  measured at p99 3.6 us on the real stream.
 
 ## Public API (kept stable for `bot/policy.py`)
 
@@ -33,6 +40,8 @@ measure it (`tools/replay.py`) and the synthetic test suite (`tests/test_combat.
 | `decide(obs, tr, now)` | `{"aim": [...], "fire": [bool, bool], "reload": bool?}` |
 | `holding(me, kind)` | slot index holding `kind`, or `None` |
 | `can_hit(kind, d, los)` | coarse range/line check used by `pick` |
+| `threat_scan(obs, now, horizon=1.5)` | incoming projectiles that will pass within body/splash radius |
+| `dodge_vector(obs, me=None)` | `(dx, dy, urgency)` lateral escape suggestion; `(0, 0, 0)` when clear |
 | `last_kind` | weapon chosen by the last `decide` (used for positioning) |
 | `charging` | true while the laser is charging (policy suppresses boost) |
 | `use_mortar` | A/B knob, default `True`; config `combat.use_mortar=0` disables the mortar |
@@ -120,27 +129,33 @@ The fire gate converts pitch error into range error through `d(range)/d(pitch) =
 the target is out of LOS or farther than 55 m, to avoid self-splash.
 
 **Measured on the recording (replay instrumentation).** The three mortar shots in the
-stream are all long-flight: 95-145 m, 1.3-2.2 s time of flight. `tools/replay.py` now
+stream are all long-flight: 92-145 m, 1.3-1.6 s time of flight. `tools/replay.py` now
 reports a signed impact error for every shell (`along_m` > 0 = long, `lateral_m`, `dz_m`,
 `splash_m`, `direct`, `tof_s`) plus splash/direct damage. For the only shot where the
-target is still tracked at impact (`t=22.95`, 95 m, 1.62 s flight):
+target is still tracked at impact (`t=22.65`, 92 m, 1.56 s flight):
 
-- the bot's solve put the shell within 0.2 m of the target centre at the target's
-  fire-time distance, so the ballistic pitch and lead were right at fire time;
-- 0.15 s after the shot the target started a jetpack climb at `+8.9 m/s` and rose 13 m
+- the bot's solve put the shell at the target centre at the target's fire-time range
+  (centre 7.6 m, shell 7.3 m at `R = 92.1 m`, `dz = -0.3 m`), so the ballistic pitch and
+  the lead were right at fire time;
+- 0.45 s after the shot the target started a jetpack climb at `+8.9 m/s` and rose ~13 m
   over the flight, while changing course every 0.1 s. The shell therefore impacted
-  12.7 m long, 8.4 m lateral and 19.2 m below the target's centre - no splash, no damage;
+  15.1 m long, 4.5 m lateral and 15.4 m below the target's centre - no splash, no damage;
 - the other two shots are "untracked": the target left the recording before impact, so
-  there is no evidence they missed for aim reasons (one passed 3.6 m below the target's
-  fire-time centre at its horizontal range).
+  there is no evidence they missed for aim reasons.
 
-Conclusion: no systematic solve bias was found (aim error p50 0.36 deg, shell passes the
+One real bug turned up in that third shot: a mech falling at `vz = -16.3 m/s` had its
+vertical velocity extrapolated over the 1.5 s flight, predicting a centre far below the
+map (`aim = 6.5 deg`). Both lead loops now clamp the predicted centre to
+`terrain_z(x, y) + body offset`, so the same shot aims at 16.9 deg at a body centre that is
+at ground level - physically reachable, though the shell was still untracked at impact.
+
+Conclusion: no systematic solve bias was found (aim error p50 0.25 deg, shell passes the
 aimed point); the miss is future acceleration and terrain height that a 1.3-2.2 s ballistic
 lead cannot know. The mortar is therefore a low-confidence weapon against moving mechs, and
 the fix is target selection, not more aim math. `Combat.use_mortar` (constructor config
 `combat.use_mortar`, default 1; replay `--no-mortar`) lets the Lead A/B it off. It is not
 silently disabled: with it on the recording fires 3 shells for 0 damage; with it off the
-gun result is identical (27/16) - the mortar shots are opportunistic shots while the gun is
+gun result is identical (28/16) - the mortar shots are opportunistic shots while the gun is
 on cooldown, so the knob is neutral in this stream and must be decided on real-match data.
 
 ### Lightning (30 degree cone, 45 m, 60 dmg)
@@ -182,6 +197,44 @@ at `turn_rate` 4 rad/s / `pitch_rate` 3 rad/s):
 This is deliberately conservative: the current aim is an upper bound on the aim at impact
 because the torso only turns toward the command. Firing into the torso motion is not
 modeled.
+
+## Dodge assistance: incoming projectiles
+
+`bot/policy.py` owns movement; the combat layer only answers "is something incoming, and
+which way is sideways?". Two state-free helpers read `obs["projectiles"]` (visible enemy
+gun bullets, mortar shells and NPC bullets; our own projectiles are not listed, and lasers /
+lightning are in `obs["beams"]`, which are ignored because they cannot be dodged):
+
+```python
+threats = combat.threat_scan(obs, t)          # sorted, most urgent first
+dx, dy, urgency = combat.dodge_vector(obs, obs["self"])
+```
+
+`threat_scan` treats each projectile as a straight line and finds the time of closest
+approach `t` to our body in the next 1.5 s. We are allowed to move (our own `vel` is part of
+the relative velocity), so `t` is when both the projectile and we would be at our closest.
+The projected miss is the horizontal residual combined with the vertical gap outside the
+body (`[z, z + height]`); a projectile only counts if that miss is within the projectile's
+radius, 4 m for gun bullets and 7 m for mortar shells (the splash radius). Projectiles that
+are already past us and receding, zero-relative-velocity lines and non-finite samples are
+skipped. `urgency = (1 - miss/radius) * (1 - 0.55 * t/1.5)`, clamped to 0..1: a direct hit
+arriving immediately is 1.0, a graze late in the window is lower.
+
+`dodge_vector` takes the most urgent threat and returns the unit perpendicular to its
+horizontal path, choosing the side that keeps us moving roughly forward (dot product with
+our velocity >= 0.15). If forward is parallel to the path it leans away from the line we
+are already on; with no threat, or a zero-velocity projectile, it returns `(0, 0, 0)`.
+It never raises, keeps no state, and is pure geometry.
+
+Limits: straight-line prediction only - mortar shell gravity drop over the 1.5 s window is
+not modeled (the 7 m radius absorbs some of it), and a projectile whose path only becomes
+dangerous after a bounce/impact is not considered. The helper is advisory; the policy can
+scale `urgency` or ignore it.
+
+Cost, measured on this machine (CPython 3.12): on the real 300-observation stream,
+`dodge_vector` mean 1.16 us, p99 3.6 us (27 observations have projectiles; 15 would flag a
+threat); a synthetic 6-projectile worst case is mean 7.7 us, p99 12.3 us. Well below the
+0.2 ms budget.
 
 ## Replay harness (`tools/replay.py`)
 
@@ -234,9 +287,9 @@ worse than they are.
 Recording: 300 observations, 36.8 s, 16 mechs, the self bot has only a gun. Exactly one
 hostile (mech id 10) is ever visible; the combat target is at p50 140.1 m (p90 150.3 m),
 and the recorded self path is 363.1 m with 0 decisions outside the zone. Policy split in
-the current tree (after the Lead's policy changes): EVADE 169 decisions (56.3%), ROTATE 62
-(20.7%), FIGHT 52 (17.3%), HEAL 16 (5.3%), FARM 1; 11 switches; boost on 229 decisions
-(458 ticks); jump 28; reload 0.
+the current tree (after the Lead's policy changes): EVADE 178 decisions (59.3%), ROTATE 54
+(18.0%), FIGHT 51 (17.0%), HEAL 16 (5.3%), FARM 1; 9 switches; boost on 230 decisions
+(460 ticks); jump 28; reload 0.
 
 ### Before / after, same policy and same replay
 
@@ -244,7 +297,7 @@ the current tree (after the Lead's policy changes): EVADE 169 decisions (56.3%),
 | --- | --- | --- | --- | --- | --- | --- |
 | old `combat.py` (HEAD `21ca44f`) | 9 | 6 | 3 | 50.0% | 2.21 / 6.70 m | 0.08 / 0.22 deg |
 | new `combat.py` (policy at that time) | 31 | 31 | 18 | 58.1% | 1.46 / 6.81 m | 0.24 / 0.45 deg |
-| current tree (policy changed by the Lead) | 27 | 27 | 16 | 59.3% | 1.46 / 6.81 m | 0.28 / 0.38 deg |
+| current tree (policy changed by the Lead) | 28 | 28 | 16 | 57.1% | 1.54 / 6.81 m | 0.28 / 0.36 deg |
 
 The new gate admits about `atan2(2.1, 140) = 0.86 deg` of lateral error instead of the old
 `atan2(1.5, 140) = 0.61 deg`, which is why its average aim error at fire time is larger -
@@ -260,10 +313,10 @@ by the Lead, so only the A/B table above isolates the combat changes.
 
 | arm | gun shots/hits | other weapon shots/hits | damage (weapon) | fire requests | other weapon aim error p50 / p90 |
 | --- | --- | --- | --- | --- | --- |
-| default (gun only) | 27 / 16 (59.3%) | - | 720 (gun) | gun 27 | - |
+| default (gun only) | 28 / 16 (57.1%) | - | 720 (gun) | gun 28 | - |
 | `--arm laser` | 19 / 12 (63.2%) | laser 8 / 7 (87.5%) | 540 (gun) + 2205 (laser) | laser 67, gun 19 | 0.22 / 0.27 deg |
-| `--arm mortar` | 27 / 16 | mortar 3 / 0 (1 tracked miss at 9.97 m, 2 untracked) | 720 (gun) + 0 (mortar) | gun 27, mortar 3 | 0.32 / 0.36 deg |
-| `--arm lightning` | 27 / 16 | none (no hostile ever inside 45 m) | 720 (gun) | gun 27 | - |
+| `--arm mortar` | 28 / 16 | mortar 3 / 0 (1 tracked miss at 4.80 m, 2 untracked) | 720 (gun) + 0 (mortar) | gun 28, mortar 3 | 0.25 / 0.31 deg |
+| `--arm lightning` | 28 / 16 | none (no hostile ever inside 45 m) | 720 (gun) | gun 28 | - |
 
 Damage per hit: gun 45, laser 315 (every aimed laser shot was fired at `charge = 0.75`).
 The laser's 8th shot was a 0.6-charge release with no target when the hostile left vision
@@ -273,23 +326,23 @@ actual shots are limited by the 0.75 s charge and 1.65 s cooldown.
 
 ## What still misses, and why
 
-- **Gun at 140 m (59.3%).** Flight time is 0.5-0.56 s. The recorded target changes velocity
+- **Gun at 140 m (57.1%).** Flight time is 0.5-0.56 s. The recorded target changes velocity
   every 0.1 s (id 10's `vx` moves between -12.4 and -5.9 m/s inside 0.5 s), so a linear lead
   cannot predict it: a standalone study over all visible mech samples measured the
   horizontal lead error at p50 1.90 m / mean 2.69 m. Simulated miss distances at impact are
-  p50 1.46 m, p90 6.81 m, max 11.12 m - pure target jink, not aim math. On top of that the
+  p50 1.54 m, p90 6.81 m, max 11.12 m - pure target jink, not aim math. On top of that the
   hit simulator does not model the gun's 0.6 degree Gaussian spread (~1.47 m at 140 m), so
-  the real server hit rate will be somewhat lower than 59%. Best fixes are tactical
+  the real server hit rate will be somewhat lower than 57%. Best fixes are tactical
   (engage closer, prefer targets with low lateral velocity), not more lead math.
 - **Mortar.** 3 shots, 0 hits, 0 damage in this recording. The only measurable shot
-  (`t=22.95`, 95 m, 1.62 s flight) landed 12.7 m long / 8.4 m lateral / 19.2 m below the
-  target because the target jetpacked upward at 8.9 m/s 0.15 s after the shot and kept
-  changing course; at fire time the solve passed within 0.2 m of the target centre. The
+  (`t=22.65`, 92 m, 1.56 s flight) landed 15.1 m long / 4.5 m lateral / 15.4 m below the
+  target because the target jetpacked upward at 8.9 m/s 0.45 s after the shot and kept
+  changing course; at fire time the solve passed within 0.3 m of the target centre. The
   other 2 shots are untracked (the target left the recording before impact). Aim error is
-  p50 0.36 deg; this is future-acceleration error, not a formula error. Flight time
-  1.3-2.2 s at 95-145 m makes the mortar a low-confidence weapon against moving mechs (fine
+  p50 0.25 deg; this is future-acceleration error, not a formula error. Flight time
+  1.3-1.6 s at 92-145 m makes the mortar a low-confidence weapon against moving mechs (fine
   for stationary/slow targets and NPCs). `use_mortar` (default on) and replay `--no-mortar`
-  exist for a real-match A/B; in this stream the knob is neutral (gun 27/16 either way).
+  exist for a real-match A/B; in this stream the knob is neutral (gun 28/16 either way).
 - **Laser.** 7/7 aimed shots hit and the charge/release logic behaves. The residual risk is
   the 2.4 s charge+cooldown cycle and the charge dump when the target leaves vision while
   the laser is partly charged (the policy stops calling combat, the trigger defaults to
@@ -316,7 +369,7 @@ actual shots are limited by the 0.75 s charge and 1.65 s cooldown.
   k=1.0, 64% at 0.9, 61% at 0.8, 56% at 0.5 - noise-level differences, so the physically
   correct k=1.0 was kept.
 - **Mortar fixed 0.25 s lead** (the old code): replaced by the exact solve; the old mortar
-  aim error was p90 10.8 deg, the new one is p90 0.36 deg.
+  aim error was p90 10.8 deg, the new one is p90 0.31 deg.
 - **Laser release at 0.62 s** (the old `LASER_RELEASE`): the first 0.1 s observation at or
   above 0.62 is 0.65-0.70, worth 280-301 damage (89-96% of 315) and lower sustained DPS than
   full charge; changed to `0.72 s` threshold, which the 0.05 s charge quantum turns into an
@@ -324,7 +377,7 @@ actual shots are limited by the 0.75 s charge and 1.65 s cooldown.
 
 ## Tests
 
-`tests/test_combat.py` - standard library `unittest`, 26 tests, runs directly:
+`tests/test_combat.py` - standard library `unittest`, 36 tests, runs directly:
 
 ```
 python tests/test_combat.py
@@ -332,11 +385,16 @@ python tests/test_combat.py
 
 Coverage: stationary and 19.5 m/s crossing targets at 20/80/150/220 m for gun, laser and
 mortar (the solved direction is flown forward with the protocol speeds/gravity and must
-pass within the 2.5 m body radius), mortar high/low ground, lightning cone and range,
+pass within the 2.5 m body radius), mortar high/low ground, a falling target's lead being
+clamped to the terrain instead of extrapolated underground, lightning cone and range,
 stale-track extrapolation, cubes raising the target centre, fire withheld for large yaw
 and pitch errors, pitch clamp, visible-now overriding grid LOS, laser hold/release/cooldown
 semantics, gun reload, weapon pick order, `can_hit` boundaries and the `use_mortar` knob
-(default on; off falls through to the gun and never selects the mortar).
+(default on; off falls through to the gun and never selects the mortar). Dodge coverage: a
+shell passing 2 m ahead is flagged with the right miss/time, one passing 20 m away is not,
+an already-past projectile is ignored, zero-velocity / NaN / infinite / junk entries do not
+raise, the mortar uses the 7 m splash radius while the gun keeps 4 m, the dodge direction is
+perpendicular and stays on the forward side, and a clear sky returns zeros.
 
 ## Conformance
 
@@ -346,6 +404,6 @@ From the workspace root:
 <py> kit\check\check.py -- <py> -u bot\main.py
 ```
 
-Latest run: `PASS`, ready in 55 ms with `name 'mech-royale'`, 300/300 observations
-answered, 0 late, p50 0.3 ms / p90 3.1 / p99 3.3 / max 3.4 ms, 0 wrong ticks, 0 bad lines,
+Latest run: `PASS`, ready in 65 ms with `name 'mech-royale'`, 300/300 observations
+answered, 0 late, p50 0.3 ms / p90 2.1 / p99 3.9 / max 4.2 ms, 0 wrong ticks, 0 bad lines,
 0 debug drawings.

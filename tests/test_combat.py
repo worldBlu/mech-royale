@@ -44,15 +44,19 @@ MECH_STATS = dict(CFG["mech"])
 
 
 class StubWorld:
-    """Line of sight is just a flag; the aim solver never reads terrain."""
+    """Line of sight is just a flag; `terrain` is flat unless a test sets it."""
 
-    def __init__(self, los=True):
+    def __init__(self, los=True, terrain=None):
         self.los = los
+        self.terrain = terrain
         self.calls = 0
 
     def has_los(self, x0, y0, x1, y1):
         self.calls += 1
         return self.los
+
+    def terrain_z(self, x, y):
+        return self.terrain
 
 
 class Track:
@@ -100,9 +104,13 @@ def make_me(weapons, aim=(0.0, 0.0), pos=(0.0, 0.0, 0.0), vel=(0.0, 0.0, 0.0),
     }
 
 
-def make_obs(me, targets=()):
-    return {"t": 0.0, "self": me, "mechs": list(targets),
-            "beams": [], "projectiles": [], "events": []}
+def make_obs(me, targets=(), projectiles=()):
+    return {"t": 0.0, "self": me, "mechs": list(targets), "projectiles": list(projectiles),
+            "beams": [], "events": []}
+
+
+def proj(kind="gun", pos=(-50.0, 0.0, 4.5), vel=(252.0, 0.0, 0.0), pid=1):
+    return {"id": pid, "kind": kind, "pos": list(pos), "vel": list(vel)}
 
 
 def target_obs(tr):
@@ -278,6 +286,23 @@ class AimSolutionTests(unittest.TestCase):
         b = self.combat.aim_for(me, fat, "gun", 100.0)
         self.assertGreater(b[1], a[1])
 
+    def test_falling_target_lead_clamped_to_ground(self):
+        # A falling mech lands instead of sinking through the map, so a linear vz lead
+        # must not aim below the terrain at the predicted point.
+        blind = Combat(StubWorld(True), CFG)                 # no terrain information
+        grounded = Combat(StubWorld(True, terrain=0.0), CFG)
+        tr = Track(pos=(100.0, 0.0, 2.0), vel=(0.0, 0.0, -16.0))
+        me_gun = make_me([gun_w(), None])
+        gun_flat = blind.aim_for(me_gun, tr, "gun", 100.0)
+        gun_ground = grounded.aim_for(me_gun, tr, "gun", 100.0)
+        self.assertLess(gun_flat[1], -0.05)
+        self.assertGreater(gun_ground[1], gun_flat[1] + 0.02)
+        me_mortar = make_me([None, mortar_w()])
+        m_flat = blind.aim_for(me_mortar, tr, "mortar", 100.0)
+        m_ground = grounded.aim_for(me_mortar, tr, "mortar", 100.0)
+        self.assertLess(m_flat[1], 0.0)
+        self.assertGreater(m_ground[1], 0.1)
+
 
 class FireGatingTests(unittest.TestCase):
     def setUp(self):
@@ -416,6 +441,83 @@ class PickTests(unittest.TestCase):
         tr = Track(pos=(120.0, 0.0, 0.0))
         me = make_me([gun_w(), mortar_w()], aim=(0.0, 0.0))
         self.assertEqual(self.combat.pick(me, 120.0, True, tr), 0)
+
+
+class DodgeTests(unittest.TestCase):
+    def setUp(self):
+        self.combat = Combat(StubWorld(True), CFG)
+        self.me = make_me([gun_w(), None])          # at the origin, aim east
+
+    def test_near_miss_flagged_with_miss_and_time(self):
+        obs = make_obs(self.me, projectiles=[proj(pos=(-50.0, 2.0, 4.5))])
+        threats = self.combat.threat_scan(obs, 0.0)
+        self.assertEqual(len(threats), 1)
+        th = threats[0]
+        self.assertEqual(th["kind"], "gun")
+        self.assertAlmostEqual(th["miss"], 2.0, places=6)
+        self.assertAlmostEqual(th["t"], 50.0 / 252.0, places=6)
+        self.assertGreater(th["urgency"], 0.0)
+        self.assertLessEqual(th["urgency"], 1.0)
+
+    def test_far_miss_not_flagged(self):
+        obs = make_obs(self.me, projectiles=[proj(pos=(-50.0, 20.0, 4.5))])
+        self.assertEqual(self.combat.threat_scan(obs, 0.0), [])
+
+    def test_past_projectile_ignored(self):
+        # 2 m lateral, but already behind us and flying away: no dodge needed
+        obs = make_obs(self.me, projectiles=[proj(pos=(5.0, 2.0, 4.5))])
+        self.assertEqual(self.combat.threat_scan(obs, 0.0), [])
+
+    def test_zero_velocity_nan_and_junk_do_not_raise(self):
+        junk = [proj(pos=(-5.0, 0.0, 4.5), vel=(0.0, 0.0, 0.0)),
+                {"id": 2, "kind": "gun", "pos": (float("nan"), 0.0, 4.5),
+                 "vel": (252.0, 0.0, 0.0)},
+                {"id": 3, "kind": "gun", "pos": (-5.0, 0.0, 4.5),
+                 "vel": (float("inf"), 0.0, 0.0)},
+                "not a projectile", {}]
+        obs = make_obs(self.me, projectiles=junk)
+        self.assertEqual(self.combat.threat_scan(obs, 0.0), [])
+        self.assertEqual(self.combat.dodge_vector(obs, self.me), (0.0, 0.0, 0.0))
+        self.assertEqual(self.combat.threat_scan({}, 0.0), [])
+        self.assertEqual(self.combat.dodge_vector(None, None), (0.0, 0.0, 0.0))
+
+    def test_mortar_uses_splash_radius(self):
+        # 5.5 m off the line: outside the gun's 4 m body radius, inside the 7 m splash
+        gun_obs = make_obs(self.me, projectiles=[proj("gun", (-50.0, 5.5, 4.5))])
+        mortar_obs = make_obs(self.me, projectiles=[proj("mortar", (-50.0, 5.5, 4.5))])
+        self.assertEqual(self.combat.threat_scan(gun_obs, 0.0), [])
+        self.assertEqual(len(self.combat.threat_scan(mortar_obs, 0.0)), 1)
+
+    def test_dodge_is_perpendicular_and_forward(self):
+        # Path runs east at y=-2; our velocity is north, which is also away from the path.
+        me = make_me([gun_w(), None], aim=(0.0, 0.0), vel=(0.0, 8.0, 0.0))
+        obs = make_obs(me, projectiles=[proj(pos=(-40.0, -2.0, 4.5))])
+        dx, dy, urgency = self.combat.dodge_vector(obs, me)
+        self.assertAlmostEqual(dx, 0.0, places=6)
+        self.assertGreater(dy, 0.99)
+        self.assertTrue(0.0 <= urgency <= 1.0)
+        self.assertGreater(urgency, 0.0)
+
+    def test_dodge_leans_away_when_forward_is_parallel(self):
+        # Forward is along the path, so neither perpendicular side is more forward; the
+        # dodge should keep to the side we are already on (north of a path at y=-3).
+        me = make_me([gun_w(), None], aim=(0.0, 0.0), vel=(8.0, 0.0, 0.0))
+        obs = make_obs(me, projectiles=[proj(pos=(-40.0, -3.0, 4.5))])
+        dx, dy, _ = self.combat.dodge_vector(obs, me)
+        self.assertAlmostEqual(dx, 0.0, places=6)
+        self.assertGreater(dy, 0.5)
+
+    def test_no_threat_returns_zero(self):
+        self.assertEqual(self.combat.dodge_vector(make_obs(self.me), self.me),
+                         (0.0, 0.0, 0.0))
+
+    def test_threats_sorted_most_urgent_first(self):
+        obs = make_obs(self.me, projectiles=[proj(pos=(-50.0, 2.0, 4.5), pid=1),
+                                             proj(pos=(-200.0, 0.5, 4.5), pid=2)])
+        threats = self.combat.threat_scan(obs, 0.0)
+        self.assertEqual(len(threats), 2)
+        self.assertEqual(threats[0]["id"], 2)      # tighter miss beats the nearer-in-time one
+        self.assertLessEqual(threats[0]["urgency"], 1.0)
 
 
 class CanHitTests(unittest.TestCase):
